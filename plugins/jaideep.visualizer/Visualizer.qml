@@ -73,43 +73,72 @@ BarWidget {
     onClicked: root.toggle()
   }
 
+  // One compact transport button: a glyph, a soft hover wash, nothing else.
+  component MediaButton: Item {
+    id: btn
+    property string glyph: ""
+    signal activated()
+    width: Style.space(26)
+    height: Style.space(24)
+    opacity: enabled ? 1.0 : 0.35
+
+    Rectangle {
+      anchors.fill: parent
+      radius: Style.cornerRadius
+      color: root.bar.foreground
+      opacity: btnMouse.pressed ? 0.16 : btnMouse.containsMouse ? 0.08 : 0
+      Behavior on opacity { NumberAnimation { duration: 100 } }
+    }
+
+    Text {
+      anchors.centerIn: parent
+      text: btn.glyph
+      color: root.bar.foreground
+      font.family: root.bar.fontFamily
+      font.pixelSize: Style.font.body
+    }
+
+    MouseArea {
+      id: btnMouse
+      anchors.fill: parent
+      enabled: btn.enabled
+      hoverEnabled: true
+      cursorShape: Qt.PointingHandCursor
+      onClicked: btn.activated()
+    }
+  }
+
   PopupCard {
     id: popup
     anchorItem: root
     bar: root.bar
     owner: root
     open: root.popupOpen
-    contentWidth: popup.fittedContentWidth(controls.implicitWidth + popup.padding * 2)
+    padding: Style.space(4)
+    contentWidth: controls.implicitWidth + popup.padding * 2 + 2 * Math.max(1, Style.space(2))
     contentHeight: popup.fittedContentHeight(controls.implicitHeight)
 
     Row {
       id: controls
       anchors.centerIn: parent
-      spacing: Style.space(6)
+      spacing: Style.space(2)
 
-      Button {
-        iconText: "󰒮"
-        foreground: root.bar.foreground
+      MediaButton {
+        glyph: "󰒮"
         enabled: !!root.activePlayer && root.activePlayer.canGoPrevious
-        opacity: enabled ? 1.0 : 0.4
-        onClicked: root.activePlayer.previous()
+        onActivated: root.activePlayer.previous()
       }
 
-      Button {
-        iconText: root.activePlayer && root.activePlayer.isPlaying ? "󰏤" : "󰐊"
-        foreground: root.bar.foreground
-        iconSize: Style.font.iconLarge
+      MediaButton {
+        glyph: root.activePlayer && root.activePlayer.isPlaying ? "󰏤" : "󰐊"
         enabled: !!root.activePlayer && root.activePlayer.canTogglePlaying
-        opacity: enabled ? 1.0 : 0.4
-        onClicked: root.activePlayer.togglePlaying()
+        onActivated: root.activePlayer.togglePlaying()
       }
 
-      Button {
-        iconText: "󰒭"
-        foreground: root.bar.foreground
+      MediaButton {
+        glyph: "󰒭"
         enabled: !!root.activePlayer && root.activePlayer.canGoNext
-        opacity: enabled ? 1.0 : 0.4
-        onClicked: root.activePlayer.next()
+        onActivated: root.activePlayer.next()
       }
     }
   }
