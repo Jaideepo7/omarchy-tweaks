@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "jaideep.albumart",
+  "name": "Album art",
+  "version": "1.0.0",
+  "author": "jaideep",
+  "description": "Mini album cover for the currently playing track",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "AlbumArt.qml" },
+  "barWidget": {
+    "displayName": "Album art",
+    "description": "Mini album cover for the currently playing track",
+    "category": "Media",
+    "allowMultiple": false
+  }
+}

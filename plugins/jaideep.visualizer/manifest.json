@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "jaideep.visualizer",
+  "name": "Audio visualizer",
+  "version": "1.0.0",
+  "author": "jaideep",
+  "description": "Live audio spectrum bars powered by cava",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "Visualizer.qml" },
+  "barWidget": {
+    "displayName": "Audio visualizer",
+    "description": "Live audio spectrum bars powered by cava",
+    "category": "Media",
+    "allowMultiple": false
+  }
+}

@@ -8,6 +8,14 @@ for f in "$D"/hypr/*.lua; do ln -sfn "$f" ~/.config/hypr/"$(basename "$f")"; don
 mkdir -p ~/.local/bin
 ln -sfn "$D/bin/omarchy-proportional-grow" ~/.local/bin/omarchy-proportional-grow
 
+# Whole plugins I wrote myself (copied in, not symlinked: the shell only scans
+# real directories under ~/.config/omarchy/plugins)
+for p in "$D"/plugins/*/; do
+  name=$(basename "$p")
+  mkdir -p ~/.config/omarchy/plugins/"$name"
+  cp -r "$p". ~/.config/omarchy/plugins/"$name"/
+done
+
 # Plugin patches (each skipped if already applied or the plugin changed upstream)
 apply_patch() {  # <plugin dir> <patch file>
   if patch -p1 -d "$1" --dry-run -s < "$2" >/dev/null 2>&1; then
