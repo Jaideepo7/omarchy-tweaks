@@ -1,0 +1,29 @@
+--- a/Bar.qml
++++ b/Bar.qml
+@@ -1826,6 +1826,26 @@
+ 
+     HoverHandler { id: moduleHover }
+ 
++    // Hover-to-open: resting the pointer on a module that owns a panel for
++    // half a second opens it, as a click would.
++    Timer {
++      id: hoverOpenTimer
++      interval: 500
++      repeat: false
++      onTriggered: {
++        var item = slot.activeItem
++        if (!slot.hovered || modulePointer.dragging || !item) return
++        if (typeof item.open !== "function" || typeof item.close !== "function") return
++        if (item.opened === undefined || item.opened === true) return
++        item.open()
++      }
++    }
++
++    onHoveredChanged: {
++      if (hovered) hoverOpenTimer.restart()
++      else hoverOpenTimer.stop()
++    }
++
+     BorderSurface {
+       visible: slot.dragSource
+       anchors.fill: parent
