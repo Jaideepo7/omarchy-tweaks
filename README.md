@@ -339,5 +339,6 @@ this repo.
 ├── patches/
 │   ├── bar-hover-open.patch    # hover to open / auto-close panels
 │   └── calendar-timedrow.patch # calendar time/dot overlap fix
-└── kinetic-scroll/             # patched hypr-kinetic-scroll plugin
+├── kinetic-scroll/             # patched hypr-kinetic-scroll plugin
+└── docs/                       # README images
 ```
