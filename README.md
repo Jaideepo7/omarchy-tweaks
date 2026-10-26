@@ -174,6 +174,10 @@ floating window by 10% per press, capped at the screen size and at a minimum of 
 
 ## Bar plugins
 
+![Album art and waveform in the bar](docs/bar-media.png)
+
+*From the left: album art, the waveform, then the clock.*
+
 Both plugins are written from scratch and live in **`plugins/`**. `install.sh` copies them
 into `~/.config/omarchy/plugins/`.
 
