@@ -1,11 +1,89 @@
 --- a/Bar.qml
 +++ b/Bar.qml
-@@ -1826,6 +1826,26 @@
+@@ -1826,6 +1826,125 @@
  
      HoverHandler { id: moduleHover }
  
 +    // Hover-to-open: resting the pointer on a module that owns a panel for
-+    // half a second opens it, as a click would.
++    // half a second opens it, as a click would. A panel opened this way also
++    // closes by itself once the pointer has left both the icon and the panel,
++    // unless something inside the panel was pressed first.
++    property bool hoverSession: false
++    property var cardProbe: null
++    property var screenProbe: null
++    property int hoverAwayTicks: 0
++
++    // The popup a bar widget owns: the first nested object that looks like a
++    // KeyboardPanel / PopupCard (it has a card to put content in).
++    function findPopup(obj, depth) {
++      if (!obj || depth > 6) return null
++      var kids = []
++      if (obj.data !== undefined && obj.data !== null) for (var i = 0; i < obj.data.length; i++) kids.push(obj.data[i])
++      if (obj.children !== undefined && obj.children !== null) for (var j = 0; j < obj.children.length; j++) kids.push(obj.children[j])
++      if (obj.item) kids.push(obj.item)
++      for (var k = 0; k < kids.length; k++) {
++        var c = kids[k]
++        if (!c) continue
++        if ("anchorItem" in c && "contentItem" in c && "open" in c && "bar" in c) return c
++        var found = findPopup(c, depth + 1)
++        if (found) return found
++      }
++      return null
++    }
++
++    function attachProbes() {
++      var popup = findPopup(slot.activeItem, 0)
++      if (!popup || !popup.contentItem || popup.contentItem.length < 1) return false
++      var holder = popup.contentItem[0].parent
++      var card = holder ? holder.parent : null
++      if (!card) return false
++      if (!cardProbe || cardProbe.parent !== card) cardProbe = probeComponent.createObject(card)
++      if ("cardOrigin" in popup && !screenProbe) {
++        // The panel is a full-screen overlay that covers the bar, so the icon
++        // loses hover while it is open: watch the whole surface as well.
++        var top = card
++        while (top.parent) top = top.parent
++        screenProbe = probeComponent.createObject(top)
++      }
++      slot.popupRef = popup
++      return !!cardProbe
++    }
++    property var popupRef: null
++
++    function pointerOnIcon() {
++      if (slot.hovered) return true
++      var popup = slot.popupRef
++      if (!popup || !screenProbe || !screenProbe.hovered || !popup.anchorWindow) return false
++      var at = slot.mapToItem(popup.anchorWindow.contentItem, 0, 0)
++      var x = at.x, y = at.y
++      if (popup.barPos === "bottom") y += popup.screenH - popup.barH
++      else if (popup.barPos === "right") x += popup.screenW - popup.barW
++      var p = screenProbe.pointerPos
++      return p.x >= x - 2 && p.x <= x + slot.width + 2 && p.y >= y - 2 && p.y <= y + slot.height + 2
++    }
++
++    function endHoverSession() {
++      hoverSession = false
++      hoverAwayTicks = 0
++    }
++
++    Component {
++      id: probeComponent
++      Item {
++        id: probe
++        property bool pressed: false
++        readonly property bool hovered: probeHover.hovered
++        readonly property point pointerPos: probeHover.point.position
++        anchors.fill: parent
++        z: 1000
++        HoverHandler { id: probeHover }
++        TapHandler {
++          acceptedButtons: Qt.AllButtons
++          onPressedChanged: if (pressed) probe.pressed = true
++        }
++      }
++    }
++
 +    Timer {
 +      id: hoverOpenTimer
 +      interval: 500
@@ -16,6 +94,27 @@
 +        if (typeof item.open !== "function" || typeof item.close !== "function") return
 +        if (item.opened === undefined || item.opened === true) return
 +        item.open()
++        slot.hoverAwayTicks = 0
++        slot.hoverSession = true
++        if (slot.cardProbe) slot.cardProbe.pressed = false
++      }
++    }
++
++    Timer {
++      interval: 120
++      repeat: true
++      running: slot.hoverSession
++      onTriggered: {
++        var item = slot.activeItem
++        if (!item || item.opened !== true) { slot.endHoverSession(); return }
++        if (!slot.attachProbes()) return
++        if (slot.cardProbe.pressed) { slot.endHoverSession(); return }
++        if (slot.pointerOnIcon() || slot.cardProbe.hovered) { slot.hoverAwayTicks = 0; return }
++        slot.hoverAwayTicks++
++        if (slot.hoverAwayTicks >= 3) {
++          slot.endHoverSession()
++          item.close()
++        }
 +      }
 +    }
 +
