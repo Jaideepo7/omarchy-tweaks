@@ -73,13 +73,16 @@ BarWidget {
     onClicked: root.toggle()
   }
 
+  // Overall size of the media card; everything below scales with it.
+  readonly property real popupScale: 1.35
+
   // One compact transport button: a glyph, a soft hover wash, nothing else.
   component MediaButton: Item {
     id: btn
     property string glyph: ""
     signal activated()
-    width: Style.space(26)
-    height: Style.space(24)
+    width: Math.round(Style.space(26) * root.popupScale)
+    height: Math.round(Style.space(24) * root.popupScale)
     opacity: enabled ? 1.0 : 0.35
 
     Rectangle {
@@ -95,7 +98,7 @@ BarWidget {
       text: btn.glyph
       color: root.bar.foreground
       font.family: root.bar.fontFamily
-      font.pixelSize: Style.font.body
+      font.pixelSize: Math.round(Style.font.body * root.popupScale)
     }
 
     MouseArea {
@@ -114,14 +117,14 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
-    padding: Style.space(4)
+    padding: Math.round(Style.space(4) * root.popupScale)
     contentWidth: controls.implicitWidth + popup.padding * 2 + 2 * Math.max(1, Style.space(2))
     contentHeight: popup.fittedContentHeight(controls.implicitHeight)
 
     Row {
       id: controls
       anchors.centerIn: parent
-      spacing: Style.space(2)
+      spacing: Math.round(Style.space(2) * root.popupScale)
 
       MediaButton {
         glyph: "󰒮"
