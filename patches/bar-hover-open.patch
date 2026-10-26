@@ -1,6 +1,6 @@
 --- a/Bar.qml
 +++ b/Bar.qml
-@@ -1826,6 +1826,125 @@
+@@ -1826,6 +1826,148 @@
  
      HoverHandler { id: moduleHover }
  
@@ -10,7 +10,9 @@
 +    // unless something inside the panel was pressed first.
 +    property bool hoverSession: false
 +    property var cardProbe: null
-+    property var screenProbe: null
++    property real cursorX: 0
++    property real cursorY: 0
++    property bool cursorKnown: false
 +    property int hoverAwayTicks: 0
 +
 +    // The popup a bar widget owns: the first nested object that looks like a
@@ -18,13 +20,23 @@
 +    function findPopup(obj, depth) {
 +      if (!obj || depth > 6) return null
 +      var kids = []
-+      if (obj.data !== undefined && obj.data !== null) for (var i = 0; i < obj.data.length; i++) kids.push(obj.data[i])
-+      if (obj.children !== undefined && obj.children !== null) for (var j = 0; j < obj.children.length; j++) kids.push(obj.children[j])
-+      if (obj.item) kids.push(obj.item)
++      var lists = []
++      try { lists.push(obj.data) } catch (e1) {}
++      try { lists.push(obj.children) } catch (e2) {}
++      for (var l = 0; l < lists.length; l++) {
++        var list = lists[l]
++        if (list === undefined || list === null) continue
++        try {
++          for (var i = 0; i < list.length; i++) kids.push(list[i])
++        } catch (e3) {}
++      }
++      try { if (obj.item) kids.push(obj.item) } catch (e4) {}
 +      for (var k = 0; k < kids.length; k++) {
 +        var c = kids[k]
 +        if (!c) continue
-+        if ("anchorItem" in c && "contentItem" in c && "open" in c && "bar" in c) return c
++        var isPopup = false
++        try { isPopup = "anchorItem" in c && "contentItem" in c && "open" in c && "bar" in c } catch (e5) {}
++        if (isPopup) return c
 +        var found = findPopup(c, depth + 1)
 +        if (found) return found
 +      }
@@ -38,28 +50,38 @@
 +      var card = holder ? holder.parent : null
 +      if (!card) return false
 +      if (!cardProbe || cardProbe.parent !== card) cardProbe = probeComponent.createObject(card)
-+      if ("cardOrigin" in popup && !screenProbe) {
-+        // The panel is a full-screen overlay that covers the bar, so the icon
-+        // loses hover while it is open: watch the whole surface as well.
-+        var top = card
-+        while (top.parent) top = top.parent
-+        screenProbe = probeComponent.createObject(top)
-+      }
 +      slot.popupRef = popup
 +      return !!cardProbe
 +    }
 +    property var popupRef: null
 +
++    // The open panel covers the bar with a full-screen layer, so the icon
++    // stops seeing hover, and that layer only learns where the pointer is once
++    // it moves. Ask Hyprland where the cursor is instead.
 +    function pointerOnIcon() {
-+      if (slot.hovered) return true
-+      var popup = slot.popupRef
-+      if (!popup || !screenProbe || !screenProbe.hovered || !popup.anchorWindow) return false
-+      var at = slot.mapToItem(popup.anchorWindow.contentItem, 0, 0)
-+      var x = at.x, y = at.y
-+      if (popup.barPos === "bottom") y += popup.screenH - popup.barH
-+      else if (popup.barPos === "right") x += popup.screenW - popup.barW
-+      var p = screenProbe.pointerPos
-+      return p.x >= x - 2 && p.x <= x + slot.width + 2 && p.y >= y - 2 && p.y <= y + slot.height + 2
++      if (slot.hovered || !cursorKnown) return true
++      var w = root.slotWindow(slot)
++      if (!w || !w.screen || !w.contentItem) return true
++      var at = slot.mapToItem(w.contentItem, 0, 0)
++      var x = w.screen.x + at.x, y = w.screen.y + at.y
++      if (root.position === "bottom") y += w.screen.height - w.height
++      else if (root.position === "right") x += w.screen.width - w.width
++      return cursorX >= x - 2 && cursorX <= x + slot.width + 2 && cursorY >= y - 2 && cursorY <= y + slot.height + 2
++    }
++
++    Process {
++      id: cursorProc
++      command: ["hyprctl", "cursorpos", "-j"]
++      stdout: StdioCollector {
++        onStreamFinished: {
++          try {
++            var c = JSON.parse(text)
++            slot.cursorX = c.x
++            slot.cursorY = c.y
++            slot.cursorKnown = true
++          } catch (e) {}
++        }
++      }
 +    }
 +
 +    function endHoverSession() {
@@ -73,7 +95,6 @@
 +        id: probe
 +        property bool pressed: false
 +        readonly property bool hovered: probeHover.hovered
-+        readonly property point pointerPos: probeHover.point.position
 +        anchors.fill: parent
 +        z: 1000
 +        HoverHandler { id: probeHover }
@@ -95,6 +116,7 @@
 +        if (item.opened === undefined || item.opened === true) return
 +        item.open()
 +        slot.hoverAwayTicks = 0
++        slot.cursorKnown = false
 +        slot.hoverSession = true
 +        if (slot.cardProbe) slot.cardProbe.pressed = false
 +      }
@@ -108,6 +130,7 @@
 +        var item = slot.activeItem
 +        if (!item || item.opened !== true) { slot.endHoverSession(); return }
 +        if (!slot.attachProbes()) return
++        if (!cursorProc.running) cursorProc.running = true
 +        if (slot.cardProbe.pressed) { slot.endHoverSession(); return }
 +        if (slot.pointerOnIcon() || slot.cardProbe.hovered) { slot.hoverAwayTicks = 0; return }
 +        slot.hoverAwayTicks++
