@@ -5,3 +5,4 @@ Personal Omarchy tweaks. Run `./install.sh` after any update/resync.
 - patches/bar-hover-open.patch: hovering a bar icon for 0.5s opens its panel; it auto-closes when the pointer leaves unless clicked inside
 - plugins/jaideep.visualizer: waveform; click/hover shows prev / play-pause / next
 - plugins/jaideep.albumart: cover art; click jumps to the playing window/tab
+- kinetic-scroll/: my patch to savonovv/hypr-kinetic-scroll (inertial touchpad scrolling). `kinetic-scroll/build.sh` rebuilds it; `autostart-snippet.lua` loads it at login (not enabled by install.sh)

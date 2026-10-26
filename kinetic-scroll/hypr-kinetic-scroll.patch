@@ -1,0 +1,1469 @@
+diff --git i/Makefile w/Makefile
+index fb32abe..750a854 100644
+--- i/Makefile
++++ w/Makefile
+@@ -11,7 +11,7 @@ OUT = $(PLUGIN_NAME).so
+ 
+ all: $(OUT)
+ 
+-$(OUT): $(SRC) globals.hpp kinetic.hpp
++$(OUT): $(SRC) globals.hpp kinetic.hpp Makefile
+ 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(SRC) -o $@ `$(PKG_CONFIG)`
+ 
+ clean:
+diff --git i/README.md w/README.md
+index b317043..d539165 100644
+--- i/README.md
++++ w/README.md
+@@ -13,7 +13,10 @@ Releases: https://github.com/savonovv/hypr-kinetic-scroll/releases
+ 
+ - Touchpad-only inertia (ignores real mouse wheels)
+ - Exponential velocity smoothing with configurable decay
+-- Momentum starts only after fingers leave the touchpad
++- Momentum starts on libinput's finger-lift (`axis_stop`), using finger speed over the last 40 ms
++- Frame-rate independent physics (time-based decay, driven by the monitor's render loop)
++- Client gets a proper `axis_stop` when momentum ends
++- Touchpads are discovered lazily, so hotplug and resume work
+ - Touching the touchpad again stops active momentum
+ - Synthetic scroll emission via Hyprland seat manager
+ - Configurable thresholds and frame interval
+@@ -56,16 +59,22 @@ cp hypr-kinetic-scroll.so "$TMP"
+ hyprctl plugin load "$TMP"
+ ```
+ 
++## Matching Firefox / Zen
++
++The defaults follow Firefox APZ (what Zen uses for touchpad flings): exponential friction
++of 0.002 per ms (= `decel` 0.967 per 16.7 ms), launch speed from the average of the last
++5 reports within 150 ms, and a stop threshold of 0.01 px/ms. Apps then glide like Zen does.
++
+ ## Configuration
+ 
+ Add these to your Hyprland config (e.g. `~/.config/hypr/input.conf`):
+ 
+ ```ini
+ plugin:kinetic-scroll:enabled = 1
+-plugin:kinetic-scroll:decel = 0.92
+-plugin:kinetic-scroll:min_velocity = 0.5
++plugin:kinetic-scroll:decel = 0.967
++plugin:kinetic-scroll:min_velocity = 0.17
+ plugin:kinetic-scroll:interval_ms = 16
+-plugin:kinetic-scroll:delta_multiplier = 1.25
++plugin:kinetic-scroll:delta_multiplier = 1.0
+ plugin:kinetic-scroll:disable_in_browser = 1
+ plugin:kinetic-scroll:stop_on_target_change = 1
+ plugin:kinetic-scroll:disabled_classes =
+@@ -74,12 +83,13 @@ plugin:kinetic-scroll:disabled_classes =
+ plugin:kinetic-scroll:debug = 0
+ plugin:kinetic-scroll:stop_on_click = 0
+ plugin:kinetic-scroll:stop_on_focus = 0
++plugin:kinetic-scroll:stop_on_motion_key = 1
+ ```
+ 
+ ### Per-App Rules
+ 
+ For INI configs, disable kinetic scrolling per app with
+-`plugin:kinetic-scroll:disabled_classes`. Classes are exact matches and can be
++`plugin:kinetic-scroll:disabled_classes`. Classes are exact (case-insensitive) matches and can be
+ separated by commas or spaces.
+ 
+ ```ini
+@@ -126,7 +136,9 @@ Notes:
+ 
+ - `decel` is a multiplier applied each frame (lower = faster stop).
+ - `min_velocity` is the cutoff threshold for stopping inertia.
+-- `interval_ms` controls the decay frame rate (lower = smoother).
++- `decel` is per 16.7 ms and the decay is time-based, so it behaves the same at any refresh rate.
++- `interval_ms` (4-100) is only a watchdog timer; momentum is normally stepped once per rendered frame. Glides are capped at 6 s, and a `decel` outside (0,1) falls back to 0.967.
++- `stop_on_motion_key` stops momentum on arrow/page/home/end/space.
+ - `delta_multiplier` scales swipe impulse (higher = faster acceleration buildup).
+ - `disable_in_browser` keeps native browser kinetic scrolling when set to `1`.
+ - `disabled_classes` disables kinetic scrolling for exact window classes.
+@@ -152,7 +164,7 @@ synthetic events.
+ When `plugin:kinetic-scroll:debug = 1`, the plugin writes to:
+ 
+ ```
+-/tmp/hypr-kinetic-scroll.log
++$XDG_RUNTIME_DIR/hypr-kinetic-scroll.log
+ ```
+ 
+ This log shows incoming axis events, timing, and state transitions.
+diff --git i/globals.hpp w/globals.hpp
+index a377e59..db5932b 100644
+--- i/globals.hpp
++++ w/globals.hpp
+@@ -1,33 +1,9 @@
+ #pragma once
+ #include <hyprland/src/plugins/PluginAPI.hpp>
+-#include <hyprland/src/config/ConfigValue.hpp>
+-#include <string>
+ 
+-inline HANDLE PHANDLE = nullptr;
++// Defined in main.cpp. Deliberately NOT `inline`: inline variables become
++// STB_GNU_UNIQUE symbols, which pin the .so in memory and break plugin reloads.
++extern HANDLE PHANDLE;
+ 
+ class KineticState;
+-inline KineticState* g_pKineticState = nullptr;
+-
+-inline int getKineticConfigInt(const std::string& name, int fallback) {
+-    const auto OPTION = CConfigValue<Config::INTEGER>("plugin:kinetic-scroll:" + name);
+-    if (!OPTION.good())
+-        return fallback;
+-
+-    return *OPTION;
+-}
+-
+-inline double getKineticConfigFloat(const std::string& name, double fallback) {
+-    const auto OPTION = CConfigValue<Config::FLOAT>("plugin:kinetic-scroll:" + name);
+-    if (!OPTION.good())
+-        return fallback;
+-
+-    return *OPTION;
+-}
+-
+-inline std::string getKineticConfigString(const std::string& name, const std::string& fallback) {
+-    const auto OPTION = CConfigValue<Config::STRING>("plugin:kinetic-scroll:" + name);
+-    if (!OPTION.good())
+-        return fallback;
+-
+-    return *OPTION;
+-}
++extern KineticState* g_pKineticState;
+diff --git i/kinetic.cpp w/kinetic.cpp
+index 38c2ff6..9b2acc0 100644
+--- i/kinetic.cpp
++++ w/kinetic.cpp
+@@ -3,228 +3,387 @@
+ #include <hyprland/src/Compositor.hpp>
+ #include <hyprland/src/managers/SeatManager.hpp>
+ #include <hyprland/src/managers/input/InputManager.hpp>
+-#include <hyprland/src/config/ConfigValue.hpp>
++#include <algorithm>
+ #include <chrono>
+ #include <cmath>
+-#include <string>
+-#include <fstream>
+-#include <cstdint>
+-#include <cctype>
+-#include <sstream>
++#include <cstdlib>
++#include <exception>
+ 
+-static bool classLooksLikeBrowser(std::string cls) {
+-    for (auto& c : cls)
+-        c = std::tolower(static_cast<unsigned char>(c));
++namespace {
++    // `decel` is "velocity multiplier per this many ms" (matches the old 16 ms tick).
++    constexpr double REF_FRAME_MS = 1000.0 / 60.0;
++    // Firefox/Zen (APZ) launch velocity: average of the last few reports, ignoring
++    // anything older than the relevance time (apz.max_velocity_queue_size = 5,
++    // apz.velocity_relevance_time_ms = 150).
++    constexpr size_t   VELOCITY_QUEUE_SIZE   = 5;
++    constexpr uint32_t VELOCITY_RELEVANCE_MS = 150;
++    // Fingers that rested longer than this before the lift launch nothing.
++    constexpr uint32_t STALE_TAIL_MS = 80;
++    // Keep this much history per axis.
++    constexpr uint32_t HISTORY_MS = 200;
++    // Finger gesture with no report and no axis_stop for this long: discard.
++    constexpr int FINGER_IDLE_MS = 150;
++    // Sources without an axis_stop (smooth mice): launch after this much silence.
++    constexpr int NO_STOP_IDLE_MS = 50;
++    // Hard stop for runaway configs.
++    constexpr double MAX_GLIDE_MS = 6000.0;
++    constexpr int    MIN_INTERVAL_MS = 4;
++    // Smallest synthetic scroll worth sending (px).
++    constexpr double MIN_EMIT_PX = 0.5;
+ 
+-    return cls.find("firefox") != std::string::npos || cls.find("chrom") != std::string::npos || cls.find("brave") != std::string::npos ||
+-           cls.find("vivaldi") != std::string::npos || cls.find("opera") != std::string::npos || cls.find("librewolf") != std::string::npos ||
+-           cls.find("zen") != std::string::npos;
+-}
++    double nowMs() {
++        using namespace std::chrono;
++        return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
++    }
+ 
+-static bool classInList(std::string cls, std::string list) {
+-    for (auto& c : cls)
+-        c = std::tolower(static_cast<unsigned char>(c));
+-
+-    for (auto& c : list) {
+-        if (c == ',')
+-            c = ' ';
+-        else
++    std::string lower(std::string s) {
++        for (auto& c : s)
+             c = std::tolower(static_cast<unsigned char>(c));
++        return s;
+     }
+ 
+-    std::istringstream iss(list);
+-    for (std::string item; iss >> item;) {
+-        if (item == cls)
+-            return true;
++    bool classLooksLikeBrowser(const std::string& cls /* lowercase */) {
++        for (const char* needle : {"firefox", "chrom", "brave", "vivaldi", "opera", "librewolf", "zen"}) {
++            if (cls.find(needle) != std::string::npos)
++                return true;
++        }
++        return false;
+     }
+ 
+-    return false;
+-}
+-
+-struct SScrollTargetKeys {
+-    uintptr_t windowKey  = 0;
+-    uintptr_t surfaceKey = 0;
+-};
+-
+-bool KineticState::hasAppRule(const std::string& windowClass) const {
+-    return m_perAppRules.contains(windowClass);
+-}
+-
+-bool KineticState::shouldProcessForWindow(const std::string& windowClass) const {
+-    const auto it = m_perAppRules.find(windowClass);
+-    if (it != m_perAppRules.end())
+-        return it->second;
+-    return m_defaultAppRule;
+-}
+-
+-void KineticState::setAppRule(const std::string& appClass, bool enabled) {
+-    m_perAppRules[appClass] = enabled;
+-}
+-
+-void KineticState::setDefaultAppRule(bool enabled) {
+-    m_defaultAppRule = enabled;
+-}
+-
+-void KineticState::resetAppRules() {
+-    m_perAppRules.clear();
+-    m_defaultAppRule = true;
+-}
+-
+-static SScrollTargetKeys currentScrollTargetKeys() {
+-    SScrollTargetKeys out;
+-
+-    if (g_pInputManager) {
+-        const auto PWIN = g_pInputManager->m_lastMouseFocus.lock();
+-        out.windowKey   = PWIN ? reinterpret_cast<uintptr_t>(PWIN.get()) : 0;
++    PHLWINDOW currentWindow() {
++        return g_pInputManager ? g_pInputManager->m_lastMouseFocus.lock() : nullptr;
+     }
+-
+-    if (g_pSeatManager) {
+-        const auto PSURF = g_pSeatManager->m_state.pointerFocus.lock();
+-        out.surfaceKey   = PSURF ? reinterpret_cast<uintptr_t>(PSURF.get()) : 0;
+-    }
+-
+-    return out;
+ }
+ 
+ KineticState::KineticState() {
+-    auto* loop = g_pCompositor->m_wlEventLoop;
++    auto* loop   = g_pCompositor->m_wlEventLoop;
+     m_stopTimer  = wl_event_loop_add_timer(loop, onStopTimer, this);
+     m_decayTimer = wl_event_loop_add_timer(loop, onDecayTimer, this);
++
++    for (auto& ax : m_axes)
++        ax.samples.reserve(32);
+ }
+ 
+ KineticState::~KineticState() {
++    if (m_decaying)
++        sendOwedStops();
++
+     if (m_stopTimer)
+         wl_event_source_remove(m_stopTimer);
+     if (m_decayTimer)
+         wl_event_source_remove(m_decayTimer);
+ }
+ 
+-void KineticState::onAxis(IPointer::SAxisEvent& e) {
+-    static uint64_t s_lastNotifyMs = 0;
++void KineticState::logLine(const std::string& s) {
++    if (!m_log.is_open()) {
++        const char* dir = std::getenv("XDG_RUNTIME_DIR");
++        m_log.open(std::string(dir && *dir ? dir : "/tmp") + "/hypr-kinetic-scroll.log", std::ios::app);
++    }
++    if (m_log.is_open())
++        m_log << "[hypr-kinetic-scroll] " << s << std::endl;
++}
+ 
+-    if (!getKineticConfigInt("enabled", 1))
++// ---------------------------------------------------------------- rules ----
++
++void KineticState::setAppRule(const std::string& appClass, bool enabled) {
++    m_perAppRules[lower(appClass)] = enabled;
++    invalidateWindowDecisions();
++}
++
++void KineticState::setDefaultAppRule(bool enabled) {
++    m_defaultAppRule = enabled;
++    invalidateWindowDecisions();
++}
++
++void KineticState::resetAppRules() {
++    m_perAppRules.clear();
++    m_defaultAppRule = true;
++    invalidateWindowDecisions();
++}
++
++void KineticState::invalidateWindowDecisions() {
++    m_gen++;
++}
++
++void KineticState::refreshDisabledClasses() {
++    std::string raw = *m_cfg.disabledClasses;
++    if (raw == m_disabledRaw)
+         return;
+ 
+-    const auto targetKeys = currentScrollTargetKeys();
++    m_disabledRaw = raw;
++    m_disabledClasses.clear();
+ 
+-    if (getKineticConfigInt("stop_on_target_change", 1) && m_scrollTargetWindowKey != 0) {
+-        const bool windowChanged = targetKeys.windowKey != 0 && targetKeys.windowKey != m_scrollTargetWindowKey;
+-        const bool surfaceChanged = targetKeys.surfaceKey != 0 && targetKeys.surfaceKey != m_scrollTargetSurfaceKey;
+-        if (windowChanged || surfaceChanged)
+-            stopKinetic("targetChanged");
++    std::string cur;
++    for (char c : lower(raw) + ' ') {
++        if (c == ',' || std::isspace(static_cast<unsigned char>(c))) {
++            if (!cur.empty())
++                m_disabledClasses.insert(cur);
++            cur.clear();
++        } else
++            cur += c;
+     }
++}
+ 
+-    const auto PWIN = g_pInputManager ? g_pInputManager->m_lastMouseFocus.lock() : nullptr;
+-    if (PWIN) {
+-        const bool hasRule = hasAppRule(PWIN->m_class);
+-        if (classInList(PWIN->m_class, getKineticConfigString("disabled_classes", ""))) {
+-            if (m_decaying)
+-                stopKinetic("disabledClasses");
+-            return;
+-        }
++bool KineticState::evaluateAllowed(const PHLWINDOW& win) {
++    if (!win)
++        return true;
+ 
+-        if (!shouldProcessForWindow(PWIN->m_class)) {
+-            if (m_decaying)
+-                stopKinetic("appRule");
+-            return;
+-        }
++    refreshDisabledClasses();
++    const std::string cls = lower(win->m_class);
+ 
+-        if (getKineticConfigInt("disable_in_browser", 1) && !hasRule && classLooksLikeBrowser(PWIN->m_class)) {
+-            if (m_decaying)
+-                stopKinetic("browserFocus");
+-            return;
+-        }
+-    }
++    if (m_disabledClasses.contains(cls))
++        return false;
+ 
+-    // Only handle touchpad scrolling (some devices report as mouse with smooth deltas)
+-    const bool touchpadSource = (e.source == WL_POINTER_AXIS_SOURCE_FINGER || e.source == WL_POINTER_AXIS_SOURCE_CONTINUOUS);
+-    const bool smoothMouse    = (e.mouse && e.deltaDiscrete == 0);
+-    if (!touchpadSource && !smoothMouse)
++    // An explicit rule wins over the browser heuristic.
++    if (const auto it = m_perAppRules.find(cls); it != m_perAppRules.end())
++        return it->second;
++
++    if (!m_defaultAppRule)
++        return false;
++
++    return !(*m_cfg.disableInBrowser && classLooksLikeBrowser(cls));
++}
++
++// Cached per window; the cache is dropped on config reload / class change / rule change.
++bool KineticState::allowedFor(const PHLWINDOW& win) {
++    const void* key = win.get();
++    if (key == m_decisionKey && m_decisionGen == m_gen)
++        return m_decisionAllowed;
++
++    m_decisionKey     = key;
++    m_decisionGen     = m_gen;
++    m_decisionAllowed = evaluateAllowed(win);
++    return m_decisionAllowed;
++}
++
++// ------------------------------------------------------- touchpad hotplug ----
++
++// Touchpads can appear after the plugin loads (resume from suspend, USB/BT pads),
++// so devices are (re)discovered lazily instead of once at init.
++void KineticState::ensurePointerListeners() {
++    if (!g_pInputManager)
+         return;
+ 
+-    if (e.delta == 0.0 && e.deltaDiscrete == 0)
+-        return;
++    std::erase_if(m_pads, [](const SPad& p) { return p.pointer.expired(); });
+ 
+-    const double scaledDelta = e.delta * getKineticConfigFloat("delta_multiplier", 1.25);
++    for (const auto& pointer : g_pInputManager->m_pointers) {
++        if (!pointer || !pointer->m_isTouchpad)
++            continue;
+ 
+-    // Touching the pad again grabs the content and cancels existing momentum.
+-    if (m_decaying) {
+-        if (getKineticConfigInt("debug", 0)) {
+-            std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-            if (log.is_open())
+-                log << "[hypr-kinetic-scroll] onAxis: new gesture stops decay self=" << this << "\n";
+-        }
+-        stopKinetic("newGesture");
++        const bool known = std::ranges::any_of(m_pads, [&](const SPad& p) { return p.pointer.lock() == pointer; });
++        if (known)
++            continue;
++
++        SPad pad;
++        pad.pointer = pointer;
++        pad.listeners.emplace_back(pointer->m_pointerEvents.motion.listen([this](const IPointer::SMotionEvent&) { onTouchpadContact(); }));
++        pad.listeners.emplace_back(pointer->m_pointerEvents.holdBegin.listen([this](const IPointer::SHoldBeginEvent&) { onTouchpadContact(); }));
++        m_pads.emplace_back(std::move(pad));
++        dbg("tracking touchpad {}", pointer->m_hlName);
++    }
++}
++
++// ---------------------------------------------------------------- target ----
++
++void KineticState::captureTarget() {
++    const auto win = currentWindow();
++    m_targetWin    = win;
++    m_hadWin       = !!win;
++
++    if (g_pSeatManager) {
++        m_targetSurf = g_pSeatManager->m_state.pointerFocus;
++        m_hadSurf    = !m_targetSurf.expired();
+     }
+ 
+-    m_tracking              = true;
+-    m_axisEventInFrame      = touchpadSource;
+-    m_scrollTargetWindowKey = targetKeys.windowKey;
+-    m_scrollTargetSurfaceKey = targetKeys.surfaceKey;
++    m_stepMonitor = win ? win->m_monitor : PHLMONITORREF{};
++}
+ 
+-    constexpr double alpha = 0.3;
+-    uint32_t         dt    = e.timeMs - m_lastEventMs;
+-
+-    if (m_lastEventMs > 0 && dt > 0 && dt < 200) {
+-        // Exponential smoothing of deltas
+-        if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+-            m_velocityV = alpha * scaledDelta + (1.0 - alpha) * m_velocityV;
+-        else
+-            m_velocityH = alpha * scaledDelta + (1.0 - alpha) * m_velocityH;
+-    } else {
+-        // First event or large gap - seed velocity directly
+-        if (e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+-            m_velocityV = scaledDelta;
+-        else
+-            m_velocityH = scaledDelta;
++bool KineticState::targetChanged() const {
++    if (m_hadWin) {
++        if (m_targetWin.expired())
++            return true;
++        const auto cur = currentWindow();
++        if (cur && cur != m_targetWin.lock())
++            return true;
+     }
+ 
+-    m_lastEventMs = e.timeMs;
+-
+-    if (getKineticConfigInt("debug", 0)) {
+-        auto     now    = std::chrono::steady_clock::now();
+-        uint64_t nowMs  = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+-        if (nowMs - s_lastNotifyMs > 200) {
+-            const char* axis = e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL ? "v" : "h";
+-            std::string msg = "[hypr-kinetic-scroll] axis=" + std::string(axis) +
+-                              " delta=" + std::to_string(e.delta) +
+-                              " source=" + std::to_string((int)e.source) +
+-                              " mouse=" + std::to_string(e.mouse ? 1 : 0) +
+-                              " discrete=" + std::to_string(e.deltaDiscrete) +
+-                              " dt=" + std::to_string(dt) +
+-                              " v=" + std::to_string(m_velocityV) +
+-                              " h=" + std::to_string(m_velocityH) +
+-                              " self=" + std::to_string(reinterpret_cast<uintptr_t>(this));
+-            HyprlandAPI::addNotification(PHANDLE, msg, CHyprColor{0.2, 0.6, 1.0, 1.0}, 1000);
+-            std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-            if (log.is_open())
+-                log << msg << "\n";
+-            s_lastNotifyMs = nowMs;
+-        }
++    if (m_hadSurf && g_pSeatManager) {
++        if (m_targetSurf.expired())
++            return true;
++        const auto cur = g_pSeatManager->m_state.pointerFocus.lock();
++        if (cur && cur != m_targetSurf.lock())
++            return true;
+     }
+ 
+-    // A quick lift produces an axis-less frame before this timer. If fingers
+-    // remain still, discard the stale velocity instead of applying it later.
+-    m_cancelOnStopTimer = touchpadSource;
+-    wl_event_source_timer_update(m_stopTimer, touchpadSource ? 100 : 50);
+-    // Ensure decay timer is off while actively tracking
++    return false;
++}
++
++// ------------------------------------------------------------- gestures ----
++
++double KineticState::minVelocityPerMs() const {
++    return std::max(0.0, static_cast<double>(*m_cfg.minVelocity)) / REF_FRAME_MS;
++}
++
++double KineticState::launchVelocity(const SAxis& ax, uint32_t liftMs) const {
++    if (ax.samples.empty())
++        return 0.0;
++
++    const uint32_t last = ax.samples.back().timeMs;
++
++    // "scroll, pause, lift" must not fling.
++    if (liftMs > last && liftMs - last > STALE_TAIL_MS)
++        return 0.0;
++
++    // Sum the movement of the reports inside the window, and divide by the time that
++    // movement actually spans: from the report *before* the first included one up to the
++    // last. Dividing by a fixed window would over-count by one report interval, so a 60 Hz
++    // pad would fling ~20% harder than a 125 Hz one at the same finger speed.
++    double sum   = 0.0;
++    size_t first = ax.samples.size();
++    for (size_t i = ax.samples.size(); i-- > 0;) {
++        if (ax.samples.size() - i > VELOCITY_QUEUE_SIZE || last - ax.samples[i].timeMs >= VELOCITY_RELEVANCE_MS)
++            break;
++        sum += ax.samples[i].delta;
++        first = i;
++    }
++
++    double spanMs;
++    if (first > 0)
++        spanMs = last - ax.samples[first - 1].timeMs;
++    else if (ax.samples.size() > 1)
++        spanMs = (last - ax.samples[0].timeMs) * ax.samples.size() / (ax.samples.size() - 1.0); // no earlier report: assume the average interval
++    else
++        spanMs = 16.0;
++
++    spanMs = std::max(spanMs, 1.0);
++    return sum / spanMs * *m_cfg.deltaMultiplier;
++}
++
++void KineticState::onAxis(const IPointer::SAxisEvent& e, Event::SCallbackInfo& info) {
++    try {
++        onAxisImpl(e, info);
++    } catch (const std::exception& ex) {
++        fail("onAxis", ex.what());
++    } catch (...) {
++        fail("onAxis", "unknown");
++    }
++}
++
++// An exception escaping into Hyprland's signal dispatch aborts the whole compositor.
++void KineticState::fail(const char* where, const char* what) {
++    logLine(std::format("exception in {}: {}", where, what));
++    m_tracking = m_decaying = false;
++    wl_event_source_timer_update(m_stopTimer, 0);
+     wl_event_source_timer_update(m_decayTimer, 0);
+ }
+ 
+-void KineticState::onPointerFrame() {
+-    if (m_axisEventInFrame) {
+-        m_axisEventInFrame = false;
++void KineticState::onAxisImpl(const IPointer::SAxisEvent& e, Event::SCallbackInfo& info) {
++    if (!*m_cfg.enabled) {
++        if (m_tracking || m_decaying)
++            stopKinetic("disabled");
+         return;
+     }
+ 
+-    if (!m_tracking)
++    dbg("raw axis={} delta={:.3f} discrete={} src={} mouse={} t={}", (int)e.axis, e.delta, e.deltaDiscrete, (int)e.source, e.mouse, e.timeMs);
++
++    // Cheap bail-out first so real wheels cost nothing.
++    const bool finger         = e.source == WL_POINTER_AXIS_SOURCE_FINGER;
++    const bool touchpadSource = finger || e.source == WL_POINTER_AXIS_SOURCE_CONTINUOUS;
++    const bool smoothMouse    = e.mouse && e.deltaDiscrete == 0;
++    if (!touchpadSource && !smoothMouse)
+         return;
+ 
+-    // An axis-less frame marks the end of the scroll sequence, but does not
+-    // distinguish a finger lift from stationary fingers. Give libinput's hold
+-    // event a chance to cancel stale velocity before emitting any momentum.
+-    m_cancelOnStopTimer = false;
+-    wl_event_source_timer_update(m_stopTimer, 32);
++    ensurePointerListeners();
++
++    // libinput's finger-lift marker: axis_stop (value 0).
++    if (e.delta == 0.0 && e.deltaDiscrete == 0) {
++        if (!finger)
++            return;
++
++        if (m_decaying) {
++            // We own the gesture now; the client must not see the real lift.
++            info.cancelled = true;
++            return;
++        }
++
++        if (m_tracking)
++            launch(e.timeMs, &info);
++        return;
++    }
++
++    if (m_tracking || m_decaying) {
++        if (*m_cfg.stopOnTargetChange && targetChanged())
++            stopKinetic("targetChanged");
++    }
++
++    // Touching and scrolling again grabs the content.
++    if (m_decaying)
++        stopKinetic("newGesture");
++
++    if (!m_tracking) {
++        if (!allowedFor(currentWindow()))
++            return;
++
++        resetState();
++        m_tracking = true;
++        m_source   = e.source;
++        captureTarget();
++    }
++
++    auto& ax = m_axes[e.axis == WL_POINTER_AXIS_HORIZONTAL_SCROLL ? 1 : 0];
++    ax.samples.push_back({e.timeMs, e.delta});
++    ax.owesStop = ax.owesStop || finger;
++
++    // drop history older than what we ever look at
++    const auto cutoff = std::ranges::find_if(ax.samples, [&](const SSample& s) { return e.timeMs - s.timeMs <= HISTORY_MS; });
++    ax.samples.erase(ax.samples.begin(), cutoff);
++
++    m_lastEventMs = e.timeMs;
++    m_source      = e.source;
++
++    dbg("axis={} delta={:.3f} src={} mouse={} t={}", (int)e.axis, e.delta, (int)e.source, e.mouse, e.timeMs);
++
++    // Finger gestures end with axis_stop; this only guards against it never coming
++    // (e.g. fingers resting after a scroll). Other sources have no stop event, so
++    // silence is their lift.
++    wl_event_source_timer_update(m_stopTimer, finger ? FINGER_IDLE_MS : NO_STOP_IDLE_MS);
++    wl_event_source_timer_update(m_decayTimer, 0);
++}
++
++void KineticState::launch(uint32_t liftMs, Event::SCallbackInfo* info) {
++    wl_event_source_timer_update(m_stopTimer, 0);
++
++    const double minV = minVelocityPerMs();
++    bool         any  = false;
++
++    for (auto& ax : m_axes) {
++        ax.velocity = launchVelocity(ax, liftMs);
++        if (std::abs(ax.velocity) < minV)
++            ax.velocity = 0.0;
++        any = any || ax.velocity != 0.0;
++    }
++
++    if (!any) {
++        dbg("launch: below threshold, no momentum");
++        resetState(); // the real lift (if any) passes through untouched
++        return;
++    }
++
++    if (info && m_source == WL_POINTER_AXIS_SOURCE_FINGER)
++        info->cancelled = true;
++    else
++        for (auto& ax : m_axes)
++            ax.owesStop = false; // sources without axis_stop get none from us either
++
++    m_tracking   = false;
++    m_decaying   = true;
++    // The last finger report is typically ~one report interval old: start the first
++    // step right away (covering that gap) instead of waiting for the next frame.
++    m_launchedMs = nowMs();
++    m_lastStepMs = m_launchedMs - 8.0;
++    dbg("launch: v={:.4f} h={:.4f} units/ms", m_axes[0].velocity, m_axes[1].velocity);
++    armDecayTimer();
++    step("launch");
+ }
+ 
+ void KineticState::onTouchpadContact() {
+@@ -232,164 +391,211 @@ void KineticState::onTouchpadContact() {
+         stopKinetic("touchpadContact");
+ }
+ 
+-void KineticState::stopKinetic(const char* reason) {
+-    if (getKineticConfigInt("debug", 0)) {
+-        std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-        if (log.is_open())
+-            log << "[hypr-kinetic-scroll] stopKinetic reason=" << (reason ? reason : "(null)") << " self=" << this << "\n";
++void KineticState::onMotionKey(uint32_t key) {
++    dbg("key {} decaying={}", key, m_decaying);
++    if (!m_decaying || !*m_cfg.stopOnMotionKey)
++        return;
++
++    // evdev codes: HOME END PAGEUP PAGEDOWN UP DOWN LEFT RIGHT SPACE
++    switch (key) {
++        case 102: case 107: case 104: case 109: case 103: case 108: case 105: case 106: case 57: stopKinetic("motionKey"); break;
++        default: break;
+     }
+-    m_velocityV            = 0.0;
+-    m_velocityH            = 0.0;
+-    m_tracking             = false;
+-    m_decaying             = false;
+-    m_axisEventInFrame     = false;
+-    m_cancelOnStopTimer    = false;
+-    m_lastEventMs          = 0;
+-    m_scrollTargetWindowKey = 0;
+-    m_scrollTargetSurfaceKey = 0;
++}
++
++void KineticState::resetState() {
++    for (auto& ax : m_axes) {
++        ax.samples.clear();
++        ax.velocity = 0.0;
++        ax.pending  = 0.0;
++        ax.owesStop = false;
++    }
++    m_tracking    = false;
++    m_decaying    = false;
++    m_lastEventMs = 0;
++    m_hadWin = m_hadSurf = false;
++    m_targetWin.reset();
++    m_targetSurf.reset();
++    m_stepMonitor.reset();
++}
++
++// Gesture ownership: we swallowed the real axis_stop, so the client is owed one.
++void KineticState::sendOwedStops() {
++    if (!g_pSeatManager)
++        return;
++
++    uint32_t t    = static_cast<uint32_t>(nowMs());
++    bool     sent = false;
++
++    for (int i = 0; i < 2; i++) {
++        if (!m_axes[i].owesStop)
++            continue;
++        g_pSeatManager->sendPointerAxis(t, i == 0 ? WL_POINTER_AXIS_VERTICAL_SCROLL : WL_POINTER_AXIS_HORIZONTAL_SCROLL, 0, 0, 0, WL_POINTER_AXIS_SOURCE_FINGER,
++                                        WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
++        m_axes[i].owesStop = false;
++        sent               = true;
++    }
++
++    if (sent)
++        g_pSeatManager->sendPointerFrame();
++}
++
++void KineticState::stopKinetic(const char* reason) {
++    dbg("stop reason={}", reason ? reason : "(null)");
++
++    if (m_decaying)
++        sendOwedStops();
++
+     wl_event_source_timer_update(m_stopTimer, 0);
+     wl_event_source_timer_update(m_decayTimer, 0);
++    resetState();
++}
++
++void KineticState::finishMomentum() {
++    stopKinetic("decayDone");
+ }
+ 
+ int KineticState::onStopTimer(void* data) {
+     auto* self = static_cast<KineticState*>(data);
+ 
+-    if (getKineticConfigInt("debug", 0)) {
+-        std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-        if (log.is_open()) {
+-            log << "[hypr-kinetic-scroll] stopTimer tracking=" << (self->m_tracking ? 1 : 0)
+-                << " v=" << self->m_velocityV << " h=" << self->m_velocityH << " self=" << self << "\n";
+-        }
+-    }
+-
+     if (!self->m_tracking)
+         return 0;
+ 
+-    if (self->m_cancelOnStopTimer) {
+-        self->stopKinetic("gestureIdle");
+-        return 0;
++    try {
++        if (self->m_source == WL_POINTER_AXIS_SOURCE_FINGER)
++            self->stopKinetic("gestureIdle");
++        else
++            self->launch(self->m_lastEventMs, nullptr);
++    } catch (const std::exception& ex) {
++        self->fail("stopTimer", ex.what());
++    } catch (...) {
++        self->fail("stopTimer", "unknown");
+     }
+-
+-    self->beginDecay("fallbackTimeout");
+     return 0;
+ }
+ 
+-void KineticState::beginDecay(const char* reason) {
+-    if (!m_tracking)
++// ---------------------------------------------------------------- decay ----
++
++void KineticState::armDecayTimer() {
++    const int interval = std::clamp<int>(static_cast<int>(*m_cfg.intervalMs), MIN_INTERVAL_MS, 100);
++    wl_event_source_timer_update(m_decayTimer, interval);
++}
++
++void KineticState::onRenderPre(PHLMONITOR mon) {
++    if (!m_decaying || !mon || m_stepMonitor.lock() != mon)
+         return;
+ 
+-    if (getKineticConfigInt("debug", 0)) {
+-        std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-        if (log.is_open())
+-            log << "[hypr-kinetic-scroll] beginDecay reason=" << reason << " self=" << this << "\n";
++    try {
++        step("frame");
++    } catch (const std::exception& ex) {
++        fail("render", ex.what());
++    } catch (...) {
++        fail("render", "unknown");
+     }
+-
+-    const double minVelocity = getKineticConfigFloat("min_velocity", 0.5);
+-    if (std::abs(m_velocityV) < minVelocity && std::abs(m_velocityH) < minVelocity) {
+-        stopKinetic("belowThreshold");
+-        return;
+-    }
+-
+-    m_tracking = false;
+-    m_decaying = true;
+-    m_cancelOnStopTimer = false;
+-
+-    wl_event_source_timer_update(m_stopTimer, 0);
+-    wl_event_source_timer_update(m_decayTimer, getKineticConfigInt("interval_ms", 16));
+ }
+ 
+ int KineticState::onDecayTimer(void* data) {
+     auto* self = static_cast<KineticState*>(data);
+ 
+-    if (!self->m_decaying) {
+-        if (getKineticConfigInt("debug", 0)) {
+-            std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-            if (log.is_open())
+-                log << "[hypr-kinetic-scroll] decayTimer skipped (not decaying)\n";
+-        }
++    if (!self->m_decaying)
+         return 0;
+-    }
+ 
+-    const auto targetKeys = currentScrollTargetKeys();
+-
+-    if (getKineticConfigInt("stop_on_target_change", 1) && self->m_scrollTargetWindowKey != 0) {
+-        const bool windowChanged  = targetKeys.windowKey != 0 && targetKeys.windowKey != self->m_scrollTargetWindowKey;
+-        const bool surfaceChanged = targetKeys.surfaceKey != 0 && targetKeys.surfaceKey != self->m_scrollTargetSurfaceKey;
+-        if (windowChanged || surfaceChanged) {
+-            self->stopKinetic("targetChangedDecay");
++    // Watchdog: when frames are being rendered the render hook already stepped.
++    const int    interval = std::clamp<int>(static_cast<int>(*self->m_cfg.intervalMs), MIN_INTERVAL_MS, 100);
++    const double since    = nowMs() - self->m_lastStepMs;
++    if (since >= interval * 0.9 || self->m_stepMonitor.expired()) {
++        try {
++            self->step("timer");
++        } catch (const std::exception& ex) {
++            self->fail("timer", ex.what());
++            return 0;
++        } catch (...) {
++            self->fail("timer", "unknown");
+             return 0;
+         }
+     }
+ 
+-    const auto PWIN = g_pInputManager ? g_pInputManager->m_lastMouseFocus.lock() : nullptr;
+-    if (PWIN) {
+-        const bool hasRule = self->hasAppRule(PWIN->m_class);
+-        if (classInList(PWIN->m_class, getKineticConfigString("disabled_classes", ""))) {
+-            self->stopKinetic("disabledClassesDecay");
+-            return 0;
+-        }
+-
+-        if (!self->shouldProcessForWindow(PWIN->m_class)) {
+-            self->stopKinetic("appRuleDecay");
+-            return 0;
+-        }
+-
+-        if (getKineticConfigInt("disable_in_browser", 1) && !hasRule && classLooksLikeBrowser(PWIN->m_class)) {
+-            self->stopKinetic("browserDecay");
+-            return 0;
+-        }
+-    }
+-
+-    // Apply deceleration
+-    const double decel = getKineticConfigFloat("decel", 0.92);
+-    self->m_velocityV *= decel;
+-    self->m_velocityH *= decel;
+-
+-    const double minVelocity = getKineticConfigFloat("min_velocity", 0.5);
+-    bool activeV = std::abs(self->m_velocityV) >= minVelocity;
+-    bool activeH = std::abs(self->m_velocityH) >= minVelocity;
+-
+-    if (!activeV && !activeH) {
+-        self->stopKinetic("decayDone");
+-        return 0;
+-    }
+-
+-    self->emitSyntheticScroll();
+-
+-    // Re-arm for next frame
+-    wl_event_source_timer_update(self->m_decayTimer, getKineticConfigInt("interval_ms", 16));
++    if (self->m_decaying)
++        self->armDecayTimer();
+     return 0;
+ }
+ 
+-void KineticState::emitSyntheticScroll() {
+-    static auto PSCROLLFACTOR = CConfigValue<Hyprlang::FLOAT>("input:touchpad:scroll_factor");
+-    auto     now         = std::chrono::steady_clock::now();
+-    uint32_t timeMs      = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+-    double   scrollFactor = *PSCROLLFACTOR;
++void KineticState::step(const char* origin) {
++    if (!m_decaying || !g_pSeatManager)
++        return;
+ 
+-    const double minVelocity = getKineticConfigFloat("min_velocity", 0.5);
+-
+-    if (std::abs(m_velocityV) >= minVelocity) {
+-        g_pSeatManager->sendPointerAxis(
+-            timeMs,
+-            WL_POINTER_AXIS_VERTICAL_SCROLL,
+-            m_velocityV * scrollFactor,
+-            0,   // discrete
+-            0,   // v120
+-            WL_POINTER_AXIS_SOURCE_CONTINUOUS,
+-            WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
++    if (*m_cfg.stopOnTargetChange && targetChanged()) {
++        stopKinetic("targetChangedDecay");
++        return;
+     }
+ 
+-    if (std::abs(m_velocityH) >= minVelocity) {
+-        g_pSeatManager->sendPointerAxis(
+-            timeMs,
+-            WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+-            m_velocityH * scrollFactor,
+-            0,
+-            0,
+-            WL_POINTER_AXIS_SOURCE_CONTINUOUS,
+-            WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
++    const auto win = currentWindow();
++    if (nowMs() - m_launchedMs > MAX_GLIDE_MS) {
++        stopKinetic("maxGlide");
++        return;
+     }
+ 
+-    g_pSeatManager->sendPointerFrame();
++    if (!allowedFor(win)) {
++        stopKinetic("windowDisallowed");
++        return;
++    }
++
++    if (g_pSeatManager->m_state.pointerFocus.expired()) {
++        stopKinetic("noPointerFocus");
++        return;
++    }
++
++    const double now = nowMs();
++    const double dt  = std::min(now - m_lastStepMs, 50.0);
++    if (dt < 0.5)
++        return;
++    m_lastStepMs = now;
++
++    // v(t) = v0 * exp(-t / tau); distance over dt = v0 * tau * (1 - exp(-dt / tau)).
++    // Independent of frame rate and timer jitter.
++    double decel = *m_cfg.decel;
++    if (!(decel > 0.0 && decel < 1.0))
++        decel = 0.967; // nonsense config (>= 1 never stops): use the default
++    decel = std::clamp(decel, 0.05, 0.995);
++    const double tau    = -REF_FRAME_MS / std::log(decel);
++    const double f      = std::exp(-dt / tau);
++    const double factor = tau * (1.0 - f);
++    // Same precedence as Hyprland: per-window `scroll_touchpad` rule, else the global option.
++    const double scroll = (win && win->m_ruleApplicator) ? win->m_ruleApplicator->scrollTouchpad().valueOrDefault() : *m_cfg.scrollFactor;
++    const double minV   = minVelocityPerMs();
++    const uint32_t t    = static_cast<uint32_t>(now);
++
++    bool emitted = false, alive = false;
++
++    for (int i = 0; i < 2; i++) {
++        auto& ax = m_axes[i];
++        if (std::abs(ax.velocity) < minV) {
++            ax.velocity = 0.0;
++            continue;
++        }
++
++        // High refresh rates make late steps tiny (240 Hz: ~0.04 px), and some clients round
++        // or drop sub-pixel values. Accumulate and emit once there is something worth sending,
++        // carrying the remainder (quantized to wl_fixed's 1/256).
++        ax.pending += ax.velocity * factor * scroll;
++        if (std::abs(ax.pending) >= MIN_EMIT_PX) {
++            const double out = std::round(ax.pending * 256.0) / 256.0;
++            ax.pending -= out;
++            g_pSeatManager->sendPointerAxis(t, i == 0 ? WL_POINTER_AXIS_VERTICAL_SCROLL : WL_POINTER_AXIS_HORIZONTAL_SCROLL, out, 0, 0,
++                                            m_source == WL_POINTER_AXIS_SOURCE_FINGER ? WL_POINTER_AXIS_SOURCE_FINGER : WL_POINTER_AXIS_SOURCE_CONTINUOUS,
++                                            WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
++            emitted = true;
++        }
++
++        ax.velocity *= f;
++        alive = alive || std::abs(ax.velocity) >= minV;
++    }
++
++    if (emitted)
++        g_pSeatManager->sendPointerFrame();
++
++    dbg("step({}) dt={:.2f} v={:.4f} h={:.4f}", origin, dt, m_axes[0].velocity, m_axes[1].velocity);
++
++    if (!alive)
++        finishMomentum();
+ }
+diff --git i/kinetic.hpp w/kinetic.hpp
+index 15e060f..cd50258 100644
+--- i/kinetic.hpp
++++ w/kinetic.hpp
+@@ -1,44 +1,132 @@
+ #pragma once
+ #include <hyprland/src/devices/IPointer.hpp>
++#include <hyprland/src/event/EventBus.hpp>
++#include <hyprland/src/config/ConfigValue.hpp>
++#include <hyprland/src/desktop/view/Window.hpp>
++#include <hyprland/src/output/Monitor.hpp>
+ #include <wayland-server-core.h>
+ #include <cstdint>
+-#include <unordered_map>
++#include <fstream>
++#include <format>
+ #include <string>
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
++class CWLSurfaceResource;
++
++// Bound once after the config values are registered (never per event).
++struct SKineticConfig {
++    CConfigValue<Config::INTEGER> enabled;
++    CConfigValue<Config::FLOAT>   decel;
++    CConfigValue<Config::FLOAT>   minVelocity;
++    CConfigValue<Config::INTEGER> intervalMs;
++    CConfigValue<Config::FLOAT>   deltaMultiplier;
++    CConfigValue<Config::INTEGER> disableInBrowser;
++    CConfigValue<Config::INTEGER> stopOnTargetChange;
++    CConfigValue<std::string>     disabledClasses;
++    CConfigValue<Config::INTEGER> debug;
++    CConfigValue<Config::INTEGER> stopOnClick;
++    CConfigValue<Config::INTEGER> stopOnFocus;
++    CConfigValue<Config::INTEGER> stopOnMotionKey;
++    CConfigValue<Config::FLOAT>   scrollFactor; // input:touchpad:scroll_factor
++};
+ 
+ class KineticState {
+   public:
+     KineticState();
+     ~KineticState();
+ 
+-    void onAxis(IPointer::SAxisEvent& e);
+-    void onPointerFrame();
++    void onAxis(const IPointer::SAxisEvent& e, Event::SCallbackInfo& info);
+     void onTouchpadContact();
++    void onMotionKey(uint32_t evdevKey);
++    void onRenderPre(PHLMONITOR mon);
+     void stopKinetic(const char* reason = nullptr);
++
+     void setAppRule(const std::string& appClass, bool enabled);
+     void setDefaultAppRule(bool enabled);
+     void resetAppRules();
++    void invalidateWindowDecisions();
++    void ensurePointerListeners();
++
++    SKineticConfig m_cfg;
+ 
+   private:
++    struct SSample {
++        uint32_t timeMs = 0;
++        double   delta  = 0.0;
++    };
++
++    struct SAxis {
++        std::vector<SSample> samples;    // recent finger reports, event time
++        double               velocity = 0.0; // units/ms while coasting
++        double               pending  = 0.0; // distance not yet emitted
++        bool                 owesStop = false;
++    };
++
++    struct SPad {
++        WP<IPointer>                                          pointer;
++        std::vector<Hyprutils::Signal::CHyprSignalListener> listeners;
++    };
++
+     static int onStopTimer(void* data);
+     static int onDecayTimer(void* data);
+-    void       beginDecay(const char* reason);
+-    void       emitSyntheticScroll();
+-    bool       hasAppRule(const std::string& windowClass) const;
+-    bool       shouldProcessForWindow(const std::string& windowClass) const;
+ 
+-    double    m_velocityV             = 0.0;
+-    double    m_velocityH             = 0.0;
+-    uint32_t  m_lastEventMs           = 0;
+-    bool      m_tracking              = false;
+-    bool      m_decaying              = false;
+-    bool      m_axisEventInFrame      = false;
+-    bool      m_cancelOnStopTimer     = false;
+-    uintptr_t m_scrollTargetWindowKey = 0;
+-    uintptr_t m_scrollTargetSurfaceKey = 0;
++    void   onAxisImpl(const IPointer::SAxisEvent& e, Event::SCallbackInfo& info);
++    void   fail(const char* where, const char* what);
++    void   launch(uint32_t liftMs, Event::SCallbackInfo* info);
++    void   step(const char* origin);
++    void   finishMomentum();
++    void   sendOwedStops();
++    void   resetState();
++
++    bool   allowedFor(const PHLWINDOW& win);
++    bool   evaluateAllowed(const PHLWINDOW& win);
++    void   refreshDisabledClasses();
++    bool   targetChanged() const;
++    void   captureTarget();
++
++    double launchVelocity(const SAxis& ax, uint32_t liftMs) const;
++    double minVelocityPerMs() const;
++    void   armDecayTimer();
++
++    template <typename... A>
++    void dbg(std::format_string<A...> f, A&&... a) {
++        if (*m_cfg.debug)
++            logLine(std::format(f, std::forward<A>(a)...));
++    }
++    void logLine(const std::string& s);
++
++    SAxis m_axes[2]; // [0] vertical, [1] horizontal (wl_pointer_axis values)
++
++    bool                   m_tracking   = false;
++    bool                   m_decaying   = false;
++    wl_pointer_axis_source m_source     = WL_POINTER_AXIS_SOURCE_FINGER;
++    uint32_t               m_lastEventMs = 0;
++    double                 m_lastStepMs  = 0.0;
++    double                 m_launchedMs  = 0.0;
++
++    // scroll target at gesture start
++    PHLWINDOWREF                 m_targetWin;
++    WP<CWLSurfaceResource>       m_targetSurf;
++    bool                         m_hadWin  = false;
++    bool                         m_hadSurf = false;
++    PHLMONITORREF                m_stepMonitor;
+ 
+     wl_event_source* m_stopTimer  = nullptr;
+     wl_event_source* m_decayTimer = nullptr;
+ 
+-    std::unordered_map<std::string, bool> m_perAppRules;
++    // per-window allow decision cache
++    const void* m_decisionKey     = nullptr;
++    bool        m_decisionAllowed = true;
++    uint64_t    m_decisionGen     = 0;
++    uint64_t    m_gen             = 1;
++
++    std::unordered_map<std::string, bool> m_perAppRules; // lowercase keys
+     bool                                  m_defaultAppRule = true;
++    std::string                           m_disabledRaw;
++    std::unordered_set<std::string>       m_disabledClasses;
++
++    std::vector<SPad> m_pads;
++    std::ofstream     m_log;
+ };
+diff --git i/main.cpp w/main.cpp
+index 6d66a02..be38faf 100644
+--- i/main.cpp
++++ w/main.cpp
+@@ -7,8 +7,8 @@
+ #include <hyprland/src/config/values/types/FloatValue.hpp>
+ #include <hyprland/src/config/values/types/IntValue.hpp>
+ #include <hyprland/src/config/values/types/StringValue.hpp>
+-#include <fstream>
+ #include <sstream>
++#include <stdexcept>
+ #include <vector>
+ 
+ extern "C" {
+@@ -16,60 +16,28 @@ extern "C" {
+ #include <lua.h>
+ }
+ 
+-static Hyprutils::Signal::CHyprSignalListener g_pAxisCallback;
+-static Hyprutils::Signal::CHyprSignalListener g_pButtonCallback;
+-static Hyprutils::Signal::CHyprSignalListener g_pWindowCallback;
+-static Hyprutils::Signal::CHyprSignalListener g_pConfigReloadCallback;
+-static std::vector<Hyprutils::Signal::CHyprSignalListener> g_pTouchpadCallbacks;
++HANDLE        PHANDLE         = nullptr;
++KineticState* g_pKineticState = nullptr;
+ 
+-static void onMouseAxis(const IPointer::SAxisEvent& e, Event::SCallbackInfo& /*info*/) {
+-    if (!g_pKineticState)
+-        return;
++static Hyprutils::Signal::CHyprSignalListener              g_axisCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_buttonCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_keyCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_windowActiveCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_windowClassCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_windowDestroyCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_renderCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_preReloadCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_reloadedCallback;
++static Hyprutils::Signal::CHyprSignalListener              g_propsCallback;
+ 
+-    auto event = e;
+-    g_pKineticState->onAxis(event);
+-    // Don't cancel - let the original scroll event pass through to the app
+-}
++// Hyprland 0.56 only tracks plugin config values weakly: they must stay alive while
++// the plugin is loaded and be released in PLUGIN_EXIT (while the .so is still mapped).
++static std::vector<SP<Config::Values::IValue>> g_configValues;
+ 
+-static void onMouseButton(const IPointer::SButtonEvent& e, Event::SCallbackInfo& /*info*/) {
+-    if (!g_pKineticState)
+-        return;
+-
+-    if (!getKineticConfigInt("stop_on_click", 0))
+-        return;
+-
+-    if (e.state != WL_POINTER_BUTTON_STATE_PRESSED)
+-        return;
+-    if (getKineticConfigInt("debug", 0)) {
+-        std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-        if (log.is_open())
+-            log << "[hypr-kinetic-scroll] mouseButton -> stopKinetic\n";
+-    }
+-
+-    // Any mouse click stops kinetic scrolling
+-    g_pKineticState->stopKinetic("mouseButton");
+-}
+-
+-static void onActiveWindow() {
+-    if (!g_pKineticState)
+-        return;
+-
+-    if (!getKineticConfigInt("stop_on_focus", 0))
+-        return;
+-
+-    if (getKineticConfigInt("debug", 0)) {
+-        std::ofstream log("/tmp/hypr-kinetic-scroll.log", std::ios::app);
+-        if (log.is_open())
+-            log << "[hypr-kinetic-scroll] activeWindow -> stopKinetic\n";
+-    }
+-
+-    // Window focus change stops kinetic scrolling
+-    g_pKineticState->stopKinetic("activeWindow");
+-}
+-
+-static void onConfigPreReload() {
++static void onMouseAxis(const IPointer::SAxisEvent& e, Event::SCallbackInfo& info) {
+     if (g_pKineticState)
+-        g_pKineticState->resetAppRules();
++        g_pKineticState->onAxis(e, info);
++    // Not cancelled here unless we are swallowing a finger-lift we now own.
+ }
+ 
+ static Hyprlang::CParseResult parseKineticScrollRule(const char* /*command*/, const char* value) {
+@@ -90,6 +58,9 @@ static Hyprlang::CParseResult parseKineticScrollRule(const char* /*command*/, co
+         return result;
+     }
+ 
++    if (!g_pKineticState)
++        return result;
++
+     if (!(iss >> appClass)) {
+         g_pKineticState->setDefaultAppRule(enable);
+         return result;
+@@ -148,37 +119,40 @@ static void registerLuaFunctions() {
+ 
+ static void registerConfigValues() {
+     using namespace Config::Values;
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CIntValue>("plugin:kinetic-scroll:enabled", "Enable kinetic scrolling", 1));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CFloatValue>("plugin:kinetic-scroll:decel", "Kinetic deceleration multiplier", 0.92F));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CFloatValue>("plugin:kinetic-scroll:min_velocity", "Minimum velocity before stopping", 0.5F));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CIntValue>("plugin:kinetic-scroll:interval_ms", "Kinetic timer interval", 16));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CFloatValue>("plugin:kinetic-scroll:delta_multiplier", "Scroll delta multiplier", 1.25F));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CIntValue>("plugin:kinetic-scroll:disable_in_browser", "Disable kinetic scrolling in browsers", 1));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CIntValue>("plugin:kinetic-scroll:stop_on_target_change", "Stop inertia when scroll target changes", 1));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CStringValue>("plugin:kinetic-scroll:disabled_classes", "Comma or space separated classes with kinetic scrolling disabled", ""));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CIntValue>("plugin:kinetic-scroll:debug", "Enable kinetic scroll debug logging", 0));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CIntValue>("plugin:kinetic-scroll:stop_on_click", "Stop inertia on mouse click", 0));
+-    HyprlandAPI::addConfigValueV2(PHANDLE, makeShared<CIntValue>("plugin:kinetic-scroll:stop_on_focus", "Stop inertia on focus change", 0));
++
++    const auto add = [](auto value) {
++        g_configValues.emplace_back(value);
++        HyprlandAPI::addConfigValueV2(PHANDLE, value);
++    };
++
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:enabled", "Enable kinetic scrolling", 1));
++    add(makeShared<CFloatValue>("plugin:kinetic-scroll:decel", "Velocity multiplier per 16.7 ms (0.967 = Firefox/Zen fling friction 0.002/ms)", 0.967F, SFloatValueOptions{.min = 0.05F, .max = 0.995F}));
++    add(makeShared<CFloatValue>("plugin:kinetic-scroll:min_velocity", "Stop below this speed, in px per 16.7 ms (0.17 = Firefox apz.fling_stopped_threshold 0.01 px/ms)", 0.17F, SFloatValueOptions{.min = 0.0F}));
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:interval_ms", "Watchdog timer interval when frame callbacks are unavailable", 16, SIntValueOptions{.min = 4, .max = 100}));
++    add(makeShared<CFloatValue>("plugin:kinetic-scroll:delta_multiplier", "Launch speed multiplier (1.0 = finger speed, as Firefox/Zen)", 1.0F));
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:disable_in_browser", "Disable kinetic scrolling in browsers", 1));
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:stop_on_target_change", "Stop inertia when scroll target changes", 1));
++    add(makeShared<CStringValue>("plugin:kinetic-scroll:disabled_classes", "Comma or space separated classes with kinetic scrolling disabled", ""));
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:debug", "Enable kinetic scroll debug logging", 0));
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:stop_on_click", "Stop inertia on mouse click", 0));
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:stop_on_focus", "Stop inertia on focus change", 0));
++    add(makeShared<CIntValue>("plugin:kinetic-scroll:stop_on_motion_key", "Stop inertia on arrow/page/home/end/space", 1));
+ }
+ 
+-static void registerTouchpadCallbacks() {
+-    for (const auto& pointer : g_pInputManager->m_pointers) {
+-        if (!pointer || !pointer->m_isTouchpad)
+-            continue;
+-
+-        g_pTouchpadCallbacks.emplace_back(pointer->m_pointerEvents.frame.listen([] {
+-            if (g_pKineticState)
+-                g_pKineticState->onPointerFrame();
+-        }));
+-        g_pTouchpadCallbacks.emplace_back(pointer->m_pointerEvents.motion.listen([](const IPointer::SMotionEvent&) {
+-            if (g_pKineticState)
+-                g_pKineticState->onTouchpadContact();
+-        }));
+-        g_pTouchpadCallbacks.emplace_back(pointer->m_pointerEvents.holdBegin.listen([](const IPointer::SHoldBeginEvent&) {
+-            if (g_pKineticState)
+-                g_pKineticState->onTouchpadContact();
+-        }));
+-    }
++static void bindConfig(SKineticConfig& c) {
++    c.enabled.bind("plugin:kinetic-scroll:enabled");
++    c.decel.bind("plugin:kinetic-scroll:decel");
++    c.minVelocity.bind("plugin:kinetic-scroll:min_velocity");
++    c.intervalMs.bind("plugin:kinetic-scroll:interval_ms");
++    c.deltaMultiplier.bind("plugin:kinetic-scroll:delta_multiplier");
++    c.disableInBrowser.bind("plugin:kinetic-scroll:disable_in_browser");
++    c.stopOnTargetChange.bind("plugin:kinetic-scroll:stop_on_target_change");
++    c.disabledClasses.bind("plugin:kinetic-scroll:disabled_classes");
++    c.debug.bind("plugin:kinetic-scroll:debug");
++    c.stopOnClick.bind("plugin:kinetic-scroll:stop_on_click");
++    c.stopOnFocus.bind("plugin:kinetic-scroll:stop_on_focus");
++    c.stopOnMotionKey.bind("plugin:kinetic-scroll:stop_on_motion_key");
++    c.scrollFactor.bind("input:touchpad:scroll_factor");
+ }
+ 
+ APICALL EXPORT std::string PLUGIN_API_VERSION() {
+@@ -188,39 +162,93 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
+ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
+     PHANDLE = handle;
+ 
+-    // NOTE: version check skipped for local dev (headers v0.53.3, running v0.53.1).
+-    // Re-enable for distribution:
+-    // if (__hyprland_api_get_hash() != __hyprland_api_get_client_hash())
+-    //     throw std::runtime_error("Version mismatch");
++    // Compare as strings: pointer equality is meaningless across the .so boundary.
++    const std::string compositorHash = __hyprland_api_get_hash();
++    const std::string clientHash     = __hyprland_api_get_client_hash();
++    if (compositorHash != clientHash) {
++        HyprlandAPI::addNotification(PHANDLE, "[hypr-kinetic-scroll] Version mismatch: rebuild with `hyprpm update`", CHyprColor{1.0, 0.2, 0.2, 1.0}, 5000);
++        throw std::runtime_error("[hypr-kinetic-scroll] Version mismatch");
++    }
+ 
+     registerConfigValues();
+ 
+-    // Create kinetic state (must be before registering keyword so it's available during config parse)
++    // Must exist before the keyword is registered (it is used while the config parses).
+     g_pKineticState = new KineticState();
++    bindConfig(g_pKineticState->m_cfg);
+ 
+     HyprlandAPI::addConfigKeyword(PHANDLE, "kinetic-scroll-rule", parseKineticScrollRule, {});
+     registerLuaFunctions();
+ 
+-    // Register event callbacks
+-    g_pAxisCallback = Event::bus()->m_events.input.mouse.axis.listen(onMouseAxis);
+-    g_pButtonCallback = Event::bus()->m_events.input.mouse.button.listen(onMouseButton);
+-    g_pWindowCallback = Event::bus()->m_events.window.active.listen(onActiveWindow);
+-    g_pConfigReloadCallback = Event::bus()->m_events.config.preReload.listen(onConfigPreReload);
+-    registerTouchpadCallbacks();
++    auto& ev = Event::bus()->m_events;
+ 
+-    return {"hypr-kinetic-scroll", "Kinetic (inertial) scrolling for touchpads", "savonovv", "0.1"};
++    g_axisCallback = ev.input.mouse.axis.listen(onMouseAxis);
++
++    g_buttonCallback = ev.input.mouse.button.listen([](const IPointer::SButtonEvent& e, Event::SCallbackInfo&) {
++        try {
++            if (g_pKineticState && *g_pKineticState->m_cfg.stopOnClick && e.state == WL_POINTER_BUTTON_STATE_PRESSED)
++                g_pKineticState->stopKinetic("mouseButton");
++        } catch (...) {}
++    });
++
++    g_keyCallback = ev.input.keyboard.key.listen([](const IKeyboard::SKeyEvent& e, Event::SCallbackInfo&) {
++        try {
++            if (g_pKineticState && e.state == WL_KEYBOARD_KEY_STATE_PRESSED)
++                g_pKineticState->onMotionKey(e.keycode);
++        } catch (...) {}
++    });
++
++    g_windowActiveCallback = ev.window.active.listen([] {
++        if (g_pKineticState && *g_pKineticState->m_cfg.stopOnFocus)
++            g_pKineticState->stopKinetic("activeWindow");
++    });
++    g_windowClassCallback = ev.window.class_.listen([] {
++        if (g_pKineticState)
++            g_pKineticState->invalidateWindowDecisions();
++    });
++    g_windowDestroyCallback = ev.window.destroy.listen([] {
++        if (g_pKineticState)
++            g_pKineticState->invalidateWindowDecisions();
++    });
++
++    g_renderCallback = ev.render.pre.listen([](PHLMONITOR mon) {
++        if (g_pKineticState)
++            g_pKineticState->onRenderPre(mon);
++    });
++
++    g_preReloadCallback = ev.config.preReload.listen([] {
++        if (g_pKineticState)
++            g_pKineticState->resetAppRules();
++    });
++    g_reloadedCallback = ev.config.reloaded.listen([] {
++        if (g_pKineticState)
++            g_pKineticState->invalidateWindowDecisions();
++    });
++    g_propsCallback = ev.config.props_refreshed.listen([] {
++        if (g_pKineticState)
++            g_pKineticState->invalidateWindowDecisions();
++    });
++
++    g_pKineticState->ensurePointerListeners();
++
++    return {"hypr-kinetic-scroll", "Kinetic (inertial) scrolling for touchpads", "savonovv", "0.2"};
+ }
+ 
+ APICALL EXPORT void PLUGIN_EXIT() {
+-    // Release callback refs (Hyprland auto-cleans registered callbacks on plugin unload,
+-    // but resetting our SPs ensures deterministic ordering)
+-    g_pAxisCallback.reset();
+-    g_pButtonCallback.reset();
+-    g_pWindowCallback.reset();
+-    g_pConfigReloadCallback.reset();
+-    g_pTouchpadCallbacks.clear();
++    g_axisCallback.reset();
++    g_buttonCallback.reset();
++    g_keyCallback.reset();
++    g_windowActiveCallback.reset();
++    g_windowClassCallback.reset();
++    g_windowDestroyCallback.reset();
++    g_renderCallback.reset();
++    g_preReloadCallback.reset();
++    g_reloadedCallback.reset();
++    g_propsCallback.reset();
+ 
+-    // Clean up kinetic state (removes wl timers)
++    // Stops momentum (sending the owed axis_stop), removes timers and touchpad listeners.
+     delete g_pKineticState;
+     g_pKineticState = nullptr;
++
++    // Drop our config values while the .so is still mapped.
++    g_configValues.clear();
+ }
