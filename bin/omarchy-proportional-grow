@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Grow the focused floating window proportionally; leave tiled windows alone."""
+import json
+import sys
+import subprocess
+
+
+def grow_size(width, height, max_width, max_height, shrink=False):
+    if shrink:
+        factor = min(1.0, max(1 / 1.10, 160 / width, 90 / height))
+        return round(width * factor), round(height * factor)
+    factor = min(1.10, max_width / width, max_height / height)
+    if factor <= 1:
+        return width, height
+    return round(width * factor), round(height * factor)
+
+
+def ctl(*args):
+    return subprocess.check_output(['hyprctl', *args], text=True).strip()
+
+
+def main():
+    window = json.loads(ctl('activewindow', '-j'))
+    if not window.get('floating') or window.get('fullscreen'):
+        return
+    monitor = next(m for m in json.loads(ctl('monitors', '-j')) if m['id'] == window['monitor'])
+    mw, mh = monitor['width'], monitor['height']
+    if monitor.get('transform', 0) % 2:
+        mw, mh = mh, mw
+    left, top, right, bottom = monitor.get('reserved', [0, 0, 0, 0])
+    maxw = int(mw / monitor['scale']) - left - right - 8
+    maxh = int(mh / monitor['scale']) - top - bottom - 8
+    width, height = window['size']
+    nw, nh = grow_size(width, height, maxw, maxh, shrink="--shrink" in sys.argv)
+    if (nw, nh) == (width, height):
+        return
+    address = window['address']
+    result = ctl('dispatch', f'hl.dsp.window.resize({{ window = "address:{address}", x = {nw}, y = {nh}, relative = false }})')
+    if result != 'ok':
+        raise RuntimeError(result)
+    # Keep the enlarged window within its monitor, even when originally at an edge.
+    x, y = window['at']
+    x = max(monitor['x'] + left + 4, min(x, monitor['x'] + int(mw / monitor['scale']) - right - nw - 4))
+    y = max(monitor['y'] + top + 4, min(y, monitor['y'] + int(mh / monitor['scale']) - bottom - nh - 4))
+    result = ctl('dispatch', f'hl.dsp.window.move({{ window = "address:{address}", x = {x - window["at"][0]}, y = {y - window["at"][1]} }})')
+    if result != 'ok':
+        raise RuntimeError(result)
+
+
+if __name__ == '__main__':
+    main()

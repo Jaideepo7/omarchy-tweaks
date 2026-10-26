@@ -1,0 +1,22 @@
+--- a/TimedRow.qml
++++ b/TimedRow.qml
+@@ -74,9 +74,18 @@
+       anchors.left: parent.left
+       anchors.leftMargin: Style.space(8)
+       anchors.top: lines.top
+-      width: Style.space(40)
++      width: Math.ceil(Math.max(timeWidth.advanceWidth, timeWidth.width))
+       spacing: Style.space(1)
+ 
++      // Sized to the widest clock the format can produce ("12:00 AM"), so every
++      // row's dot lines up and a 12-hour time never runs into it.
++      TextMetrics {
++        id: timeWidth
++        font.family: root.fontFamily
++        font.pixelSize: Style.font.body
++        text: root.clock(new Date(2000, 0, 1, 12, 0, 0).getTime()).replace(/\d/g, "0")
++      }
++
+       Text {
+         text: root.clock(root.item.startMs)
+         color: root.phase === "now" && !root.declined ? Commons.Color.accent : root.foreground
