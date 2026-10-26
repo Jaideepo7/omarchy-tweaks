@@ -14,6 +14,7 @@ fixes to third-party plugins and a patched kinetic-scroll plugin for Hyprland.
 ## Contents
 
 - [Quick start](#quick-start)
+- [Installing individual pieces](#installing-individual-pieces)
 - [Keybindings](#keybindings)
 - [Bar plugins](#bar-plugins)
   - [Media controls on the waveform](#media-controls-on-the-waveform-jaideepvisualizer)
@@ -38,6 +39,116 @@ git clone https://github.com/Jaideepo7/omarchy-tweaks ~/dotfiles
 ```
 
 **After an update:** just run `~/dotfiles/install.sh` again.
+
+---
+
+## Installing individual pieces
+
+You don't need to use `install.sh`. Each piece can be installed on its own. All the steps
+below start by cloning the repo:
+
+```bash
+git clone https://github.com/Jaideepo7/omarchy-tweaks ~/omarchy-tweaks
+cd ~/omarchy-tweaks
+```
+
+### Media controls on the waveform (`jaideep.visualizer`)
+
+**Needs:** `cava` (`sudo pacman -S cava`)
+
+```bash
+cp -r plugins/jaideep.visualizer ~/.config/omarchy/plugins/
+omarchy plugin enable jaideep.visualizer --section center
+omarchy restart shell
+```
+
+- **Placement:** use `--section left|center|right`, or `--before <id>` / `--after <id>`
+  to place it next to another widget, for example `--after jaideep.albumart`.
+- **Hover to open** needs the [hover patch](#hover-to-open-bar-panels). Without it,
+  clicking the waveform still opens the card.
+
+### Album art: jump to the player (`jaideep.albumart`)
+
+**Needs:** `jq` (installed by default on Omarchy)
+
+```bash
+cp -r plugins/jaideep.albumart ~/.config/omarchy/plugins/
+chmod +x ~/.config/omarchy/plugins/jaideep.albumart/focus-player.sh
+omarchy plugin enable jaideep.albumart --section center
+omarchy restart shell
+```
+
+### Hover to open bar panels
+
+**Needs:** your own copy of the bar. The patch can't change the built-in bar in
+`/usr/share`, because system updates overwrite it.
+
+1. **Make your own copy of the bar** if you don't already have one. This creates
+   `~/.config/omarchy/plugins/<your-username>.bar` and switches to it:
+   ```bash
+   omarchy plugin clone omarchy.bar
+   ```
+2. **Apply the patch** to that copy:
+   ```bash
+   patch -p1 -d ~/.config/omarchy/plugins/$USER.bar < patches/bar-hover-open.patch
+   omarchy restart shell
+   ```
+
+> If the patch reports failed hunks, your Omarchy version's `Bar.qml` differs from the one
+> this patch was made against. The change only touches the `ModuleSlot` component, right
+> after `HoverHandler { id: moduleHover }`, so it can be copied in by hand from the patch file.
+
+**To undo it:** run `patch -R -p1 -d ~/.config/omarchy/plugins/$USER.bar < patches/bar-hover-open.patch`
+
+### Calendar time column fix
+
+**Needs:** the [`tmn73.calendar`](https://github.com/tmn73/omarchy-calendar) plugin installed:
+
+```bash
+omarchy plugin add https://github.com/tmn73/omarchy-calendar.git --enable
+```
+
+Then apply the fix:
+
+```bash
+patch -p1 -d ~/.config/omarchy/plugins/tmn73.calendar < patches/calendar-timedrow.patch
+omarchy restart shell
+```
+
+### Keybindings only
+
+Copy the lines you want from **`hypr/bindings.lua`** into your own
+`~/.config/hypr/bindings.lua`. Hyprland reloads its config automatically when the file is
+saved.
+
+- **Overriding a default:** keep the `hl.unbind(...)` line that comes before the binding.
+  Otherwise the default and your binding will both fire.
+- **Grow / shrink keys:** these also need the script:
+  ```bash
+  install -Dm755 bin/omarchy-proportional-grow ~/.local/bin/omarchy-proportional-grow
+  ```
+
+### Kinetic touchpad scrolling
+
+**Needs:** Hyprland development headers and a C++ compiler (`sudo pacman -S base-devel`).
+
+```bash
+./kinetic-scroll/build.sh
+cat kinetic-scroll/autostart-snippet.lua >> ~/.config/hypr/autostart.lua
+```
+
+Log out and back in, or load it immediately with:
+
+```bash
+hyprctl plugin load ~/hypr-kinetic-scroll-patched/hypr-kinetic-scroll.so
+```
+
+### Removing a plugin
+
+```bash
+omarchy plugin disable jaideep.visualizer   # hide it from the bar
+omarchy plugin remove jaideep.visualizer    # delete it entirely
+```
 
 ---
 
