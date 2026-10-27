@@ -46,3 +46,9 @@ hl.unbind("SUPER + SHIFT + A")
 o.bind("SUPER + SHIFT + A", "Claude", { webapp = "https://claude.ai", focus = true })
 o.bind("SUPER + SHIFT + Q", "Spotifast", "uwsm-app -- spotifast")
 o.bind("SUPER + SHIFT + Z", "Discord", { webapp = "https://discord.com/channels/@me", focus = true })
+
+-- File manager: Strata instead of Nautilus.
+hl.unbind("SUPER + SHIFT + F")
+o.bind("SUPER + SHIFT + F", "File manager", "uwsm-app -- /home/jaideep/.local/bin/strata")
+hl.unbind("SUPER + ALT + SHIFT + F")
+o.bind("SUPER + ALT + SHIFT + F", "File manager (cwd)", [[bash -c 'uwsm-app -- /home/jaideep/.local/bin/strata "$(omarchy-cmd-terminal-cwd)"']])

@@ -23,6 +23,7 @@ fixes to third-party plugins and a patched kinetic-scroll plugin for Hyprland.
   - [Hover to open bar panels](#hover-to-open-bar-panels-bar-hover-openpatch)
   - [Calendar time column fix](#calendar-time-column-fix-calendar-timedrowpatch)
 - [Kinetic touchpad scrolling](#kinetic-touchpad-scrolling)
+- [Strata as the default file manager](#strata-as-the-default-file-manager)
 - [Hyprland config](#hyprland-config)
 - [What install.sh does](#what-installsh-does)
 - [Repo layout](#repo-layout)
@@ -164,6 +165,8 @@ Defined in **`hypr/bindings.lua`**.
 | **Super + Shift + Q** | Spotifast | Native Spotify client. |
 | **Super + Shift + Z** | Discord | Web app. Focuses if open. |
 | **Super + Shift + S** | Screenshot | *Replaces Google Maps.* |
+| **Super + Shift + F** | Strata | File manager. *Replaces Nautilus.* |
+| **Super + Alt + Shift + F** | Strata in the terminal's folder | Opens the current terminal's working directory. *Replaces Nautilus.* |
 | **Super + Shift + =** | Grow floating window | Keeps its aspect ratio. Tiled windows are left alone. |
 | **Super + Shift + -** | Shrink floating window | Same, in reverse. |
 
@@ -291,6 +294,33 @@ a Hyprland plugin that adds momentum to touchpad scrolling. Files are in **`kine
 > **⚠️ Rebuild after every Hyprland update.** The `.so` only works with the Hyprland
 > version it was built against, which is why only the source patch is stored here.
 > `install.sh` does **not** enable this plugin.
+
+---
+
+## Strata as the default file manager
+
+[Strata](https://github.com/lgse/strata) replaces Nautilus everywhere, and Nautilus is uninstalled.
+
+- **Keybindings:** both file manager shortcuts open Strata (see [Keybindings](#keybindings)).
+  They expect the binary at `~/.local/bin/strata`.
+- **Opening folders:** `inode/directory` points to `io.github.lgse.Strata.desktop` in
+  `~/.config/mimeapps.list`, so `xdg-open`, browsers' download folders and so on use Strata.
+- **"Show in folder":** Strata answers `org.freedesktop.FileManager1` over D-Bus, through
+  `~/.local/share/dbus-1/services/org.freedesktop.FileManager1.service`. Strata's own
+  "set as default" option writes this file.
+
+**To set it up on a new machine:**
+
+```bash
+xdg-mime default io.github.lgse.Strata.desktop inode/directory
+sudo pacman -Rns nautilus nautilus-python   # optional: remove Nautilus
+```
+
+Then use Strata's "set as default file manager" setting to register the D-Bus service.
+
+> **Note:** the D-Bus service file has `Exec=/bin/false`, so "Show in folder" only goes
+> through Strata while Strata is running. Most apps then fall back to opening the folder,
+> which still lands in Strata.
 
 ---
 
