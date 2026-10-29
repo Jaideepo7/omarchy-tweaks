@@ -40,12 +40,12 @@ o.bind("SUPER + SHIFT + S", "Screenshot", "omarchy-capture-screenshot")
 
 -- App launchers (overrides Omawrite on W and ChatGPT on A).
 hl.unbind("SUPER + SHIFT + W")
-o.bind("SUPER + SHIFT + W", "WhatsApp", { webapp = "https://web.whatsapp.com/", focus = true })
+o.bind("SUPER + SHIFT + W", "WhatsApp", { launch = "/home/jaideep/Apps/pake/whatsapp-binary", focus = "^whatsapp-binary$" })  -- Pake app; web version: { webapp = "https://web.whatsapp.com/", focus = true }
 o.bind("SUPER + H", "Hermes", "uwsm-app -- hermes-desktop")
 hl.unbind("SUPER + SHIFT + A")
 o.bind("SUPER + SHIFT + A", "Claude", { webapp = "https://claude.ai", focus = true })
 o.bind("SUPER + SHIFT + Q", "Spotifast", "uwsm-app -- spotifast")
-o.bind("SUPER + SHIFT + Z", "Discord", { webapp = "https://discord.com/channels/@me", focus = true })
+o.bind("SUPER + SHIFT + Z", "Discord", { launch = "/home/jaideep/Apps/pake/discord-binary", focus = "^discord-binary$" })  -- Pake app; web version: { webapp = "https://discord.com/channels/@me", focus = true }
 
 -- File manager: Strata instead of Nautilus.
 hl.unbind("SUPER + SHIFT + F")

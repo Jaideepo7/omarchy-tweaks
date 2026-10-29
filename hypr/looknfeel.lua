@@ -58,8 +58,14 @@ hl.config({
   },
 
   general = {
-    gaps_in = 2,
+    gaps_in = 0,
     gaps_out = 2,
   },
 })
 -- <<< omaland managed block <<<
+
+-- Keep the screen awake while watching media.
+-- Dedicated video players: inhibit idle whenever focused.
+o.window("^(mpv|vlc|imv|org.jellyfin.*|io.github.celluloid_player.Celluloid|org.kde.haruna|smplayer)$", { idle_inhibit = "focus" })
+-- Anything (browsers, etc.) going fullscreen also inhibits idle.
+o.window(".*", { idle_inhibit = "fullscreen" })

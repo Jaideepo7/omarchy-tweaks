@@ -93,3 +93,6 @@ hl.config({
 
 -- Spotifast scrolls 1.1x faster than the global touchpad scroll factor.
 o.window("spotifast", { scroll_touchpad = 1.1 })
+
+-- Strata scrolls at the global touchpad scroll factor.
+o.window("io.github.lgse.Strata", { scroll_touchpad = 1.0 })
