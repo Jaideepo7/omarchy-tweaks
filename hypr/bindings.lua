@@ -30,9 +30,9 @@
 
 -- Proportional floating-window resize; unshifted Omarchy bindings stay default.
 hl.unbind("SUPER + SHIFT + code:21")
-o.bind("SUPER + SHIFT + code:21", "Grow floating window proportionally", "/home/jaideep/.local/bin/omarchy-proportional-grow")
+o.bind("SUPER + SHIFT + code:21", "Grow floating window proportionally", os.getenv("HOME") .. "/.local/bin/omarchy-proportional-grow")
 hl.unbind("SUPER + SHIFT + code:20")
-o.bind("SUPER + SHIFT + code:20", "Shrink floating window proportionally", "/home/jaideep/.local/bin/omarchy-proportional-grow --shrink")
+o.bind("SUPER + SHIFT + code:20", "Shrink floating window proportionally", os.getenv("HOME") .. "/.local/bin/omarchy-proportional-grow --shrink")
 
 -- Screenshot shortcut (overrides Google Maps).
 hl.unbind("SUPER + SHIFT + S")
@@ -50,9 +50,9 @@ o.rebind("SUPER + M", "Google Messages", { webapp = "https://messages.google.com
 
 -- File manager: Strata instead of Nautilus.
 hl.unbind("SUPER + SHIFT + F")
-o.bind("SUPER + SHIFT + F", "File manager", "uwsm-app -- /home/jaideep/.local/bin/strata")
+o.bind("SUPER + SHIFT + F", "File manager", "uwsm-app -- " .. os.getenv("HOME") .. "/.local/bin/strata")
 hl.unbind("SUPER + ALT + SHIFT + F")
-o.bind("SUPER + ALT + SHIFT + F", "File manager (cwd)", [[bash -c 'uwsm-app -- /home/jaideep/.local/bin/strata "$(omarchy-cmd-terminal-cwd)"']])
+o.bind("SUPER + ALT + SHIFT + F", "File manager (cwd)", [[bash -c 'uwsm-app -- "$HOME/.local/bin/strata" "$(omarchy-cmd-terminal-cwd)"']])
 
 -- Omawrite on SUPER+N
 o.bind("SUPER + N", "Omawrite", { launch = "omawrite" })
