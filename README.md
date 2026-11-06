@@ -254,6 +254,8 @@ Applies to **`jaideep.bar`**, on top of the hover patch (`install.sh` applies th
   parks just off the top of the screen.
 - **Push the pointer to the top edge** and it slides in above the fullscreen window.
 - **Move away** and it parks again about 0.35 s after the pointer leaves the bar.
+- **Slides in and out** (about 180 ms down, 120 ms up) instead of jumping. It follows
+  `omarchy toggle animations`.
 - **How it works:** an invisible 2 px strip on the Overlay layer watches the screen edge.
   Fullscreen state comes from `hyprctl -j activeworkspace`. It is checked on Hyprland events,
   and again every 1.5 s, because Quickshell's own `hasFullscreen` flag can fall out of sync.

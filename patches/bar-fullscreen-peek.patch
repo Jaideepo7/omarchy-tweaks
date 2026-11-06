@@ -1,6 +1,6 @@
 --- a/Bar.qml
 +++ b/Bar.qml
-@@ -40,6 +40,14 @@
+@@ -40,6 +40,24 @@
    // killing the entire shell. Hidden panels stay mapped but park off-screen
    // without an exclusion zone; updated by the FileView watcher further down.
    property bool barHidden: false
@@ -12,10 +12,20 @@
 +  property bool fsPeek: false
 +  property int hotEdgeHoverCount: 0
 +  readonly property bool effectiveHidden: barHidden || (fullscreenActive && !fsPeek)
++  // How far the bar is parked past its edge. Slides while peeking in
++  // fullscreen (in 180ms, out 120ms); manual hide/show still jumps.
++  property real parkOffset: effectiveHidden ? barSize : 0
++  Behavior on parkOffset {
++    enabled: root.fullscreenActive && !root.barHidden
++    NumberAnimation {
++      duration: Style.duration(root.effectiveHidden ? 120 : 180)
++      easing.type: Easing.OutCubic
++    }
++  }
    property string home: Quickshell.env("HOME")
    property string stateHome: home + "/.local/state"
    property string omarchyConfigDir: home + "/.config/omarchy"
-@@ -1194,6 +1202,128 @@
+@@ -1194,6 +1212,128 @@
      }
    }
  
@@ -144,7 +154,7 @@
    Variants {
      model: Quickshell.screens
  
-@@ -1241,7 +1371,7 @@
+@@ -1241,7 +1381,7 @@
      // textures — which measures ~150ms against ~20ms to tear down. Parking
      // keeps the surface alive, so showing is only a margin change.
      visible: !remapGuard.remapping
@@ -153,7 +163,7 @@
  
      ScreenMoveRemap {
        id: remapGuard
-@@ -1249,10 +1379,10 @@
+@@ -1249,10 +1389,10 @@
      }
  
      margins {
@@ -161,14 +171,14 @@
 -      bottom: root.barHidden && root.position === "bottom" ? -root.barSize : 0
 -      left: root.barHidden && root.position === "left" ? -root.barSize : 0
 -      right: root.barHidden && root.position === "right" ? -root.barSize : 0
-+      top: root.effectiveHidden && root.position === "top" ? -root.barSize : 0
-+      bottom: root.effectiveHidden && root.position === "bottom" ? -root.barSize : 0
-+      left: root.effectiveHidden && root.position === "left" ? -root.barSize : 0
-+      right: root.effectiveHidden && root.position === "right" ? -root.barSize : 0
++      top: root.position === "top" ? -Math.round(root.parkOffset) : 0
++      bottom: root.position === "bottom" ? -Math.round(root.parkOffset) : 0
++      left: root.position === "left" ? -Math.round(root.parkOffset) : 0
++      right: root.position === "right" ? -Math.round(root.parkOffset) : 0
      }
  
      anchors {
-@@ -1267,7 +1397,7 @@
+@@ -1267,7 +1407,7 @@
      color: root.transparent ? "transparent" : root.background
      surfaceFormat.opaque: false
      WlrLayershell.namespace: "omarchy-bar"
