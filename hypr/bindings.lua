@@ -40,15 +40,19 @@ o.bind("SUPER + SHIFT + S", "Screenshot", "omarchy-capture-screenshot")
 
 -- App launchers (overrides Omawrite on W and ChatGPT on A).
 hl.unbind("SUPER + SHIFT + W")
-o.bind("SUPER + SHIFT + W", "WhatsApp", { launch = "/home/jaideep/Apps/pake/whatsapp-binary", focus = "^whatsapp-binary$" })  -- Pake app; web version: { webapp = "https://web.whatsapp.com/", focus = true }
+o.bind("SUPER + SHIFT + W", "WhatsApp", { webapp = "https://web.whatsapp.com/", focus = true })
 o.bind("SUPER + H", "Hermes", "uwsm-app -- hermes-desktop")
 hl.unbind("SUPER + SHIFT + A")
 o.bind("SUPER + SHIFT + A", "Claude", { webapp = "https://claude.ai", focus = true })
-o.bind("SUPER + SHIFT + Q", "Spotifast", "uwsm-app -- spotifast")
-o.bind("SUPER + SHIFT + Z", "Discord", { launch = "/home/jaideep/Apps/pake/discord-binary", focus = "^discord-binary$" })  -- Pake app; web version: { webapp = "https://discord.com/channels/@me", focus = true }
+o.rebind("SUPER + SHIFT + Q", "Spotifast", "uwsm-app -- spotifast")
+o.bind("SUPER + SHIFT + Z", "Discord", { webapp = "https://discord.com/channels/@me", focus = true })
+o.rebind("SUPER + M", "Google Messages", { webapp = "https://messages.google.com/web/conversations", focus = true })
 
 -- File manager: Strata instead of Nautilus.
 hl.unbind("SUPER + SHIFT + F")
 o.bind("SUPER + SHIFT + F", "File manager", "uwsm-app -- /home/jaideep/.local/bin/strata")
 hl.unbind("SUPER + ALT + SHIFT + F")
 o.bind("SUPER + ALT + SHIFT + F", "File manager (cwd)", [[bash -c 'uwsm-app -- /home/jaideep/.local/bin/strata "$(omarchy-cmd-terminal-cwd)"']])
+
+-- Omawrite on SUPER+N
+o.bind("SUPER + N", "Omawrite", { launch = "omawrite" })

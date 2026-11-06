@@ -69,3 +69,8 @@ hl.config({
 o.window("^(mpv|vlc|imv|org.jellyfin.*|io.github.celluloid_player.Celluloid|org.kde.haruna|smplayer)$", { idle_inhibit = "focus" })
 -- Anything (browsers, etc.) going fullscreen also inhibits idle.
 o.window(".*", { idle_inhibit = "fullscreen" })
+
+-- Opt another application in to Omarchy's standard transparency.
+-- Find its class with: hyprctl clients
+-- o.transparent_window("my-app")
+-- o.transparent_window("my-app", "0.9 0.85") -- Custom active/inactive opacity.
