@@ -21,6 +21,7 @@ fixes to third-party plugins and a patched kinetic-scroll plugin for Hyprland.
   - [Album art: jump to the player](#album-art-jump-to-the-player-jaideepalbumart)
 - [Patches to existing plugins](#patches-to-existing-plugins)
   - [Hover to open bar panels](#hover-to-open-bar-panels-bar-hover-openpatch)
+  - [Fullscreen bar peek](#fullscreen-bar-peek-bar-fullscreen-peekpatch)
   - [Calendar time column fix](#calendar-time-column-fix-calendar-timedrowpatch)
 - [Kinetic touchpad scrolling](#kinetic-touchpad-scrolling)
 - [Strata as the default file manager](#strata-as-the-default-file-manager)
@@ -245,6 +246,23 @@ calendar, audio, network, Bluetooth, power, monitor, media and so on.
 > **Limitation:** while one panel is open, hovering a *different* icon won't switch panels.
 > Clicking it still does.
 
+### Fullscreen bar peek (`bar-fullscreen-peek.patch`)
+
+Applies to **`jaideep.bar`**, on top of the hover patch (`install.sh` applies them in order).
+
+- **Bar hides in fullscreen:** while the focused workspace has a fullscreen window, the bar
+  parks just off the top of the screen.
+- **Push the pointer to the top edge** and it slides in above the fullscreen window.
+- **Move away** and it parks again about 0.35 s after the pointer leaves the bar.
+- **How it works:** an invisible 2 px strip on the Overlay layer watches the screen edge.
+  Fullscreen state comes from `hyprctl -j activeworkspace`. It is checked on Hyprland events,
+  and again every 1.5 s, because Quickshell's own `hasFullscreen` flag can fall out of sync.
+  While the bar is shown, it checks `hyprctl cursorpos` every 0.4 s and hides itself if the
+  pointer is clearly away, in case a pointer-leave event got lost.
+
+> **Note:** after applying, run `omarchy restart shell`. The shell's hot-reload can keep
+> running the old `Bar.qml` even though it logs "reloading".
+
 ### Calendar time column fix (`calendar-timedrow.patch`)
 
 Applies to **`tmn73.calendar`**, the Google Calendar plugin.
@@ -368,6 +386,7 @@ this repo.
 │   └── jaideep.albumart/       # cover art + jump-to-player
 ├── patches/
 │   ├── bar-hover-open.patch    # hover to open / auto-close panels
+│   ├── bar-fullscreen-peek.patch # hide bar in fullscreen, reveal at top edge
 │   └── calendar-timedrow.patch # calendar time/dot overlap fix
 ├── kinetic-scroll/             # patched hypr-kinetic-scroll plugin
 └── docs/                       # README images

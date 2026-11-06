@@ -1,0 +1,179 @@
+--- a/Bar.qml
++++ b/Bar.qml
+@@ -40,6 +40,14 @@
+   // killing the entire shell. Hidden panels stay mapped but park off-screen
+   // without an exclusion zone; updated by the FileView watcher further down.
+   property bool barHidden: false
++  // Fullscreen peek: while the active workspace has a fullscreen window the bar
++  // parks off-screen; pointing at the bar's screen edge slides it in above the
++  // fullscreen window (Overlay layer), and it parks again once the pointer leaves.
++  property bool fullscreenActive: false
++  onFullscreenActiveChanged: if (!fullscreenActive) { fsPeek = false; hotEdgeHoverCount = 0 }
++  property bool fsPeek: false
++  property int hotEdgeHoverCount: 0
++  readonly property bool effectiveHidden: barHidden || (fullscreenActive && !fsPeek)
+   property string home: Quickshell.env("HOME")
+   property string stateHome: home + "/.local/state"
+   property string omarchyConfigDir: home + "/.config/omarchy"
+@@ -1194,6 +1202,128 @@
+     }
+   }
+ 
++  // Ask Hyprland directly. Quickshell's workspace.hasFullscreen can go stale
++  // (seen: Hyprland reports fullscreen while it says false), and a probe that
++  // is already running ignores running=true, so events queue a re-run, and a
++  // slow resync catches anything missed.
++  property bool fullscreenProbePending: false
++  function probeFullscreen() {
++    if (fullscreenProbe.running) { fullscreenProbePending = true; return }
++    fullscreenProbe.running = true
++  }
++  Process {
++    id: fullscreenProbe
++    running: true
++    command: ["bash", "-c", "hyprctl -j activeworkspace | jq -r '.hasfullscreen'"]
++    stdout: SplitParser { onRead: function(line) {
++      var v = String(line).trim() === "true"
++      root.fullscreenActive = v
++    } }
++    onExited: if (root.fullscreenProbePending) {
++      root.fullscreenProbePending = false
++      Qt.callLater(root.probeFullscreen)
++    }
++  }
++  Timer {
++    id: fullscreenEventDelay
++    interval: 60
++    onTriggered: root.probeFullscreen()
++  }
++  Timer {
++    interval: 1500
++    repeat: true
++    running: true
++    onTriggered: root.probeFullscreen()
++  }
++  Connections {
++    target: Hyprland
++    function onRawEvent(event) {
++      var n = event.name
++      if (n === "fullscreen" || n === "workspace" || n === "workspacev2" || n === "focusedmon" || n === "focusedmonv2" || n === "activewindowv2" || n === "closewindow" || n === "movewindow" || n === "movewindowv2")
++        fullscreenEventDelay.restart()
++    }
++  }
++  Timer {
++    id: fsPeekHideTimer
++    interval: 350
++    onTriggered: if (root.hotEdgeHoverCount === 0 && root.barHoverCount === 0) root.fsPeek = false
++  }
++
++  // Safety net: hover enter/leave events can still go missing (surface
++  // remaps, layer changes). While peeking, check where the cursor really is;
++  // if it's clearly away from the bar, clear the stale tallies and hide.
++  Timer {
++    id: fsPeekVerifyTimer
++    interval: 400
++    repeat: true
++    running: root.fullscreenActive && root.fsPeek
++    onTriggered: if (!cursorProbe.running) cursorProbe.running = true
++  }
++  Process {
++    id: cursorProbe
++    command: ["bash", "-c", "p=$(hyprctl cursorpos | tr -d ,); set -- $p; hyprctl -j monitors | jq -r --argjson x $1 --argjson y $2 '.[] | select($x >= .x and $x < .x + .width/.scale and $y >= .y and $y < .y + .height/.scale) | \"\\($x - .x) \\($y - .y) \\(.width/.scale) \\(.height/.scale)\"' | head -n1"]
++    stdout: SplitParser { onRead: function(line) {
++      var v = String(line).trim().split(/\s+/).map(Number)
++      if (v.length < 4 || v.some(isNaN)) return
++      var x = v[0], y = v[1], w = v[2], h = v[3]
++      var band = root.barSize + 6
++      var near = root.position === "top" ? y <= band
++               : root.position === "bottom" ? y >= h - band
++               : root.position === "left" ? x <= band
++               : x >= w - band
++      if (near || !root.fsPeek) return
++      root.hotEdgeHoverCount = 0
++      root.barHoverCount = 0
++      centerSectionRevealTimer.restart()
++      fsPeekHideTimer.stop()
++      root.fsPeek = false
++    } }
++  }
++  onBarHoverCountChanged: {
++    if (!fullscreenActive) return
++    if (barHoverCount > 0) { fsPeek = true; fsPeekHideTimer.stop() } else fsPeekHideTimer.restart()
++  }
++  onHotEdgeHoverCountChanged: {
++    if (!fullscreenActive) return
++    if (hotEdgeHoverCount > 0) { fsPeek = true; fsPeekHideTimer.stop() } else fsPeekHideTimer.restart()
++  }
++
++  component HotEdgePanel: PanelWindow {
++    id: hotEdge
++    // Stays mapped while peeking. Unmapping it the moment it was hovered meant
++    // the compositor never sent a leave event, so hotEdgeHoverCount stuck at 1
++    // and the bar never parked again.
++    visible: root.fullscreenActive && !root.barHidden
++    exclusionMode: ExclusionMode.Ignore
++    WlrLayershell.namespace: "omarchy-bar-hot-edge"
++    WlrLayershell.layer: WlrLayer.Overlay
++    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
++    color: "transparent"
++    anchors {
++      top: root.position === "top" || root.vertical
++      bottom: root.position === "bottom" || root.vertical
++      left: root.position === "left" || !root.vertical
++      right: root.position === "right" || !root.vertical
++    }
++    implicitWidth: root.vertical ? 2 : 0
++    implicitHeight: root.vertical ? 0 : 2
++    HoverHandler {
++      onHoveredChanged: root.hotEdgeHoverCount = Math.max(0, root.hotEdgeHoverCount + (hovered ? 1 : -1))
++      Component.onDestruction: if (hovered) root.hotEdgeHoverCount = Math.max(0, root.hotEdgeHoverCount - 1)
++    }
++  }
++
++  Variants {
++    model: Quickshell.screens
++
++    delegate: Component {
++      HotEdgePanel {
++        required property var modelData
++        screen: modelData
++      }
++    }
++  }
++
+   Variants {
+     model: Quickshell.screens
+ 
+@@ -1241,7 +1371,7 @@
+     // textures — which measures ~150ms against ~20ms to tear down. Parking
+     // keeps the surface alive, so showing is only a margin change.
+     visible: !remapGuard.remapping
+-    exclusionMode: root.barHidden ? ExclusionMode.Ignore : ExclusionMode.Auto
++    exclusionMode: (root.barHidden || root.fullscreenActive) ? ExclusionMode.Ignore : ExclusionMode.Auto
+ 
+     ScreenMoveRemap {
+       id: remapGuard
+@@ -1249,10 +1379,10 @@
+     }
+ 
+     margins {
+-      top: root.barHidden && root.position === "top" ? -root.barSize : 0
+-      bottom: root.barHidden && root.position === "bottom" ? -root.barSize : 0
+-      left: root.barHidden && root.position === "left" ? -root.barSize : 0
+-      right: root.barHidden && root.position === "right" ? -root.barSize : 0
++      top: root.effectiveHidden && root.position === "top" ? -root.barSize : 0
++      bottom: root.effectiveHidden && root.position === "bottom" ? -root.barSize : 0
++      left: root.effectiveHidden && root.position === "left" ? -root.barSize : 0
++      right: root.effectiveHidden && root.position === "right" ? -root.barSize : 0
+     }
+ 
+     anchors {
+@@ -1267,7 +1397,7 @@
+     color: root.transparent ? "transparent" : root.background
+     surfaceFormat.opaque: false
+     WlrLayershell.namespace: "omarchy-bar"
+-    WlrLayershell.layer: WlrLayer.Top
++    WlrLayershell.layer: root.fullscreenActive ? WlrLayer.Overlay : WlrLayer.Top
+ 
+     Loader {
+       anchors.fill: parent

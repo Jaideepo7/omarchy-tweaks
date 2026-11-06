@@ -26,6 +26,7 @@ apply_patch() {  # <plugin dir> <patch file>
 }
 apply_patch ~/.config/omarchy/plugins/tmn73.calendar "$D/patches/calendar-timedrow.patch"
 apply_patch ~/.config/omarchy/plugins/jaideep.bar "$D/patches/bar-hover-open.patch"
+apply_patch ~/.config/omarchy/plugins/jaideep.bar "$D/patches/bar-fullscreen-peek.patch"
 
 omarchy-restart-shell 2>/dev/null || true
 hyprctl reload >/dev/null 2>&1 || true
