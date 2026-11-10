@@ -1,0 +1,152 @@
+#!/bin/bash
+# Keep my Omarchy shell plugins in step with their upstreams.
+#
+# Clones of built-in plugins (manifest has omarchy.clonedFrom, no git remote)
+#   Each is a git repo with two branches:
+#     stock - what `omarchy plugin clone` would produce from the installed Omarchy,
+#             one commit per Omarchy version
+#     main  - stock + my edits, checked out live
+#   Live edits are committed, a fresh stock snapshot is merged into main, and a
+#   merge that needs a human is backed out (plugin unchanged) with a notification.
+#   rerere replays conflict resolutions made before.
+#
+# Third-party plugins (git repos with an origin remote)
+#   Checked for upstream commits and reported. They are only pulled with --pull,
+#   since their code runs unsandboxed inside the shell. Local edits are kept as
+#   local commits and rebased; a rebase that conflicts is backed out.
+#
+#   omarchy-plugin-sync           sync clones, report third-party updates
+#   omarchy-plugin-sync --pull    also pull third-party updates
+#   omarchy-plugin-sync --status  report only, change nothing
+#   omarchy-plugin-sync --init <dir>   start tracking a clone that has no repo yet
+#                                      (its current files become main on top of
+#                                      today's stock snapshot)
+set -uo pipefail
+
+PLUGINS="${PLUGIN_SYNC_DIR:-$HOME/.config/omarchy/plugins}"
+OMARCHY="${OMARCHY_PATH:-/usr/share/omarchy}"
+CLONE_BIN="$OMARCHY/bin/omarchy-plugin-clone"
+GIT=(git -c user.name=plugin-sync -c user.email=plugin-sync@localhost)
+mode=${1:-sync}
+
+version=$(pacman -Q omarchy 2>/dev/null | cut -d' ' -f2 || echo unknown)
+merged=() conflicted=() updates=() pulled=() failed=()
+
+notify() {
+  echo "plugin-sync: $2"
+  notify-send -a "Plugin sync" -u "$1" "Plugin sync" "$2" 2>/dev/null || true
+}
+fail() { echo "plugin-sync: $*" >&2; return 1; }
+
+# Reuse Omarchy's own clone copy logic so snapshots always match a fresh clone.
+eval "$(sed -n '/^copy_plugin() {/,/^}/p; /^update_manifest() {/,/^}/p' "$CLONE_BIN")"
+declare -F copy_plugin update_manifest >/dev/null || { notify critical "can't load clone helpers from $CLONE_BIN"; exit 1; }
+
+catalog=$(omarchy-plugin-catalog 2>/dev/null) || { notify critical "omarchy-plugin-catalog failed"; exit 1; }
+
+# Write what `omarchy plugin clone <source>` would produce for <dir> into <out>,
+# under plugin id <id> (default: <dir>'s name).
+stock_snapshot() {
+  local dir=$1 out=$2 id=${3:-$(basename "$1")} source_id info source_dir manifest
+  source_id=$(jq -r '.omarchy.clonedFrom' "$dir/manifest.json")
+  info=$(jq -r --arg id "$source_id" '.[] | select(.firstParty and .id == $id) | [.sourceDir, .manifestPath] | @tsv' <<<"$catalog")
+  [[ -n $info ]] || { fail "$source_id is no longer a built-in plugin"; return 1; }
+  IFS=$'\t' read -r source_dir manifest <<<"$info"
+  copy_plugin "$source_dir" "$manifest" "$out" &&
+  update_manifest "$out" "$source_id" "$id" "$(jq -r '.name' "$dir/manifest.json")"
+}
+
+# Commit a fresh stock snapshot onto the `stock` branch if it changed.
+refresh_stock() {
+  local dir=$1 snap wt rc=0
+  snap=$(mktemp -d) wt=$(mktemp -d)
+  stock_snapshot "$dir" "$snap" || { rm -rf "$snap" "$wt"; return 1; }
+  rmdir "$wt" && git -C "$dir" worktree add -q "$wt" stock || { rm -rf "$snap"; return 1; }
+  rsync -a --delete --exclude .git --exclude .gitignore "$snap"/ "$wt"/
+  git -C "$wt" add -A
+  if ! git -C "$wt" diff --cached --quiet; then
+    "${GIT[@]}" -C "$wt" commit -qm "stock: omarchy $version" || rc=1
+  fi
+  git -C "$dir" worktree remove --force "$wt"; rm -rf "$snap"
+  return $rc
+}
+
+sync_clone() {
+  local dir=$1 name; name=$(basename "$dir")
+  cd "$dir" || return
+  if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+    conflicted+=("$name (unfinished merge)"); return
+  fi
+  [[ $mode == --status ]] && { [[ -n $(git status --porcelain) ]] && echo "$name: uncommitted edits"; return; }
+  if [[ -n $(git status --porcelain) ]]; then
+    git add -A && "${GIT[@]}" commit -qm "local edits $(date '+%F %R')"
+  fi
+  refresh_stock "$dir" || { failed+=("$name"); return; }
+  git merge-base --is-ancestor stock HEAD && return
+  if "${GIT[@]}" merge -q --no-edit -m "merge stock omarchy $version" stock >/dev/null 2>&1 ||
+     { [[ -z $(git diff --name-only --diff-filter=U) ]] && "${GIT[@]}" commit -q --no-edit; }; then
+    merged+=("$name")
+  else
+    git merge --abort
+    conflicted+=("$name")
+  fi
+}
+
+sync_thirdparty() {
+  local dir=$1 name behind; name=$(basename "$dir")
+  cd "$dir" || return
+  git fetch -q 2>/dev/null || { failed+=("$name (fetch)"); return; }
+  behind=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo 0)
+  (( behind > 0 )) || return
+  if [[ $mode != --pull ]]; then updates+=("$name ($behind)"); return; fi
+  if [[ -n $(git status --porcelain) ]]; then
+    git add -A && "${GIT[@]}" commit -qm "local edits $(date '+%F %R')"
+  fi
+  if "${GIT[@]}" rebase -q @{u} >/dev/null 2>&1; then
+    pulled+=("$name")
+  else
+    git rebase --abort; conflicted+=("$name (local edits vs upstream)")
+  fi
+}
+
+init_clone() {
+  local dir; dir=$(realpath "$1")
+  [[ -f $dir/manifest.json && ! -d $dir/.git ]] || { echo "need an untracked clone dir"; exit 1; }
+  cd "$dir"
+  git init -q -b stock && printf '*.bak*\n' >.gitignore
+  local tmp; tmp=$(mktemp -d); cp -a "$dir"/. "$tmp"/
+  find . -mindepth 1 -maxdepth 1 ! -name .git ! -name .gitignore -exec rm -rf {} +
+  stock_snapshot "$tmp" "$dir" "$(basename "$dir")" || { cp -a "$tmp"/. "$dir"/; rm -rf .git; exit 1; }
+  git add -A && "${GIT[@]}" commit -qm "stock: omarchy $version"
+  git checkout -qb main
+  rsync -a --delete --exclude .git --exclude .gitignore "$tmp"/ "$dir"/; rm -rf "$tmp"
+  git add -A && "${GIT[@]}" commit -qm "my edits" 2>/dev/null
+  git config rerere.enabled true; git config rerere.autoUpdate true
+  echo "tracking $dir"; git diff --stat stock main
+  exit 0
+}
+
+[[ $mode == --init ]] && init_clone "${2:?usage: --init <plugin dir>}"
+
+for dir in "$PLUGINS"/*/; do
+  dir=${dir%/}
+  [[ -f $dir/manifest.json ]] || continue
+  if [[ -d $dir/.git ]] && git -C "$dir" remote get-url origin >/dev/null 2>&1; then
+    sync_thirdparty "$dir"
+  elif [[ $(jq -r '.omarchy.clonedFrom // ""' "$dir/manifest.json") == omarchy.* ]]; then
+    if [[ -d $dir/.git ]]; then
+      sync_clone "$dir"
+    else
+      echo "plugin-sync: $(basename "$dir") is an untracked clone (omarchy-plugin-sync --init $dir)"
+    fi
+  fi
+done
+
+(( ${#merged[@]} + ${#pulled[@]} )) && omarchy restart shell >/dev/null 2>&1
+(( ${#merged[@]} )) && notify normal "Merged Omarchy $version changes into: ${merged[*]}"
+(( ${#pulled[@]} )) && notify normal "Updated: ${pulled[*]}"
+(( ${#updates[@]} )) && notify normal "Plugin updates available: ${updates[*]}. Run omarchy-plugin-sync --pull"
+(( ${#conflicted[@]} )) && notify critical "Needs a hand merge, left unchanged: ${conflicted[*]}"
+(( ${#failed[@]} )) && notify critical "Sync failed for: ${failed[*]}"
+(( ${#merged[@]} + ${#pulled[@]} + ${#updates[@]} + ${#conflicted[@]} + ${#failed[@]} )) || echo "plugin-sync: all up to date (omarchy $version)"
+(( ${#conflicted[@]} + ${#failed[@]} == 0 ))

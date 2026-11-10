@@ -7,6 +7,7 @@ D="$(cd "$(dirname "$0")" && pwd)"
 for f in "$D"/hypr/*.lua; do ln -sfn "$f" ~/.config/hypr/"$(basename "$f")"; done
 mkdir -p ~/.local/bin
 ln -sfn "$D/bin/omarchy-proportional-grow" ~/.local/bin/omarchy-proportional-grow
+ln -sfn "$D/bin/omarchy-plugin-sync" ~/.local/bin/omarchy-plugin-sync
 
 # WirePlumber: Bluetooth software volume + A2DP auto-connect, KEF USB no-suspend
 mkdir -p ~/.config/wireplumber/wireplumber.conf.d
@@ -20,17 +21,10 @@ for p in "$D"/plugins/*/; do
   cp -r "$p". ~/.config/omarchy/plugins/"$name"/
 done
 
-# Plugin patches (each skipped if already applied or the plugin changed upstream)
-apply_patch() {  # <plugin dir> <patch file>
-  if patch -p1 -d "$1" --dry-run -s < "$2" >/dev/null 2>&1; then
-    patch -p1 -d "$1" -s < "$2" && echo "applied $(basename "$2")"
-  else
-    echo "skipped $(basename "$2") (already applied or plugin changed)"
-  fi
-}
-apply_patch ~/.config/omarchy/plugins/tmn73.calendar "$D/patches/calendar-timedrow.patch"
-apply_patch ~/.config/omarchy/plugins/jaideep.bar "$D/patches/bar-hover-open.patch"
-apply_patch ~/.config/omarchy/plugins/jaideep.bar "$D/patches/bar-fullscreen-peek.patch"
+# My clones of built-in plugins (jaideep.*) are git repos (stock/main branches)
+# kept in step with Omarchy by omarchy-plugin-sync, which also runs from the
+# post-update/post-boot hooks. The calendar fix lives as a local commit in its repo.
+command -v omarchy-plugin-sync >/dev/null && omarchy-plugin-sync || true
 
 omarchy-restart-shell 2>/dev/null || true
 hyprctl reload >/dev/null 2>&1 || true
