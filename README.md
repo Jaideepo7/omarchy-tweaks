@@ -23,6 +23,7 @@ Each piece works **on its own**, so take only the parts you want.
 - [Kinetic touchpad scrolling](#kinetic-touchpad-scrolling)
 - [Proportional window resize](#proportional-window-resize)
 - [Bluetooth speaker volume](#bluetooth-speaker-volume)
+- [Other WirePlumber fixes](#other-wireplumber-fixes)
 - [My Hyprland config](#my-hyprland-config)
 - [Repo layout](#repo-layout)
 - [Credits](#credits)
@@ -42,6 +43,7 @@ Each piece works **on its own**, so take only the parts you want.
 | [`kinetic-scroll/`](#kinetic-touchpad-scrolling) | Momentum touchpad scrolling that feels like Firefox | Patched Hyprland plugin |
 | [`omarchy-proportional-grow`](#proportional-window-resize) | Grows or shrinks a floating window while keeping its aspect ratio | Script + keybinding |
 | [`bluetooth-software-volume.conf`](#bluetooth-speaker-volume) | Makes the laptop's volume keys work on Bluetooth speakers that ignore volume commands | WirePlumber config |
+| [`wireplumber/`](#other-wireplumber-fixes) | Bluetooth A2DP auto-connect, and a no-suspend fix for the KEF LSX II LT over USB | WirePlumber config |
 | [`hypr/`](#my-hyprland-config) | My personal Hyprland config, for reference | Config |
 
 ---
@@ -304,6 +306,22 @@ its own isn't enough. To check it worked, run `pw-dump` and look at the Bluetoot
 
 ---
 
+## Other WirePlumber fixes
+
+Two more configs in `wireplumber/`. Install them the same way, into
+`~/.config/wireplumber/wireplumber.conf.d/`, then restart WirePlumber.
+
+- **`bluetooth-a2dp-autoconnect.conf`** connects a Bluetooth device's A2DP playback and capture
+  profiles as soon as it pairs. Without it, some speakers and receivers connect with no audio
+  output until you restart PipeWire or WirePlumber.
+- **`kef-lsx-no-suspend.conf`** stops WirePlumber from suspending the KEF LSX II LT's USB output
+  when it goes idle. When the stream stops, the speaker's USB firmware stops responding
+  (`usb_set_interface -110` in the kernel log), and only unplugging it fixes that. It only
+  matches that speaker, so it does nothing on other machines. Change the `node.name` pattern
+  to use it for another USB device with the same problem.
+
+---
+
 ## My Hyprland config
 
 `hypr/` is my own config, kept here for reference. Copy any lines you like into your own files
@@ -340,7 +358,7 @@ in `~/.config/hypr/`. Hyprland reloads when you save.
 
 1. **Symlinks** `hypr/*.lua` into `~/.config/hypr/`, **replacing** whatever is there.
 2. **Symlinks** `bin/omarchy-proportional-grow` into `~/.local/bin/`.
-3. **Symlinks** `wireplumber/*.conf` into `~/.config/wireplumber/wireplumber.conf.d/`.
+3. **Symlinks** `wireplumber/*.conf` (all three) into `~/.config/wireplumber/wireplumber.conf.d/`.
 4. **Copies** `plugins/*` into `~/.config/omarchy/plugins/`.
 5. **Applies** the patches to `tmn73.calendar` and `jaideep.bar`. A patch that is already
    applied, or doesn't fit, is skipped.
@@ -366,7 +384,7 @@ that.
 │   ├── bar-fullscreen-peek.patch  # hide bar in fullscreen, reveal at top edge
 │   └── calendar-timedrow.patch    # tmn73.calendar time/dot overlap fix
 ├── kinetic-scroll/                # patch + build script for hypr-kinetic-scroll
-├── wireplumber/                   # Bluetooth software-volume config
+├── wireplumber/                   # Bluetooth volume + auto-connect, KEF USB no-suspend
 ├── hypr/                          # my Hyprland Lua config
 └── docs/                          # README images
 ```

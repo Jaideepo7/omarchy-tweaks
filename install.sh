@@ -8,7 +8,7 @@ for f in "$D"/hypr/*.lua; do ln -sfn "$f" ~/.config/hypr/"$(basename "$f")"; don
 mkdir -p ~/.local/bin
 ln -sfn "$D/bin/omarchy-proportional-grow" ~/.local/bin/omarchy-proportional-grow
 
-# WirePlumber: software volume for Bluetooth speakers that ignore absolute volume
+# WirePlumber: Bluetooth software volume + A2DP auto-connect, KEF USB no-suspend
 mkdir -p ~/.config/wireplumber/wireplumber.conf.d
 for f in "$D"/wireplumber/*.conf; do ln -sfn "$f" ~/.config/wireplumber/wireplumber.conf.d/"$(basename "$f")"; done
 
