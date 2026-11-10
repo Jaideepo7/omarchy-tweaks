@@ -33,16 +33,27 @@ BarWidget {
   implicitWidth: row.implicitWidth + 14
   implicitHeight: barSize
 
+  // Only run cava while something is actually playing. Left running, it pushed
+  // 30 updates/s even in silence, repainting the bar and keeping the GPU awake.
+  readonly property bool playing: !!activePlayer && activePlayer.isPlaying
+  onPlayingChanged: if (!playing) levels = new Array(barCount).fill(0)
+
   Process {
     id: cava
     command: ["cava", "-p", Qt.resolvedUrl("cava.conf").toString().replace("file://", "")]
-    running: true
+    running: root.playing
     stdout: SplitParser {
       onRead: function(line) {
         var parts = line.split(";")
         var next = []
-        for (var i = 0; i < root.barCount; i++) next.push(Math.min(100, parseInt(parts[i]) || 0) / 100)
-        root.levels = next
+        var changed = false
+        for (var i = 0; i < root.barCount; i++) {
+          var v = Math.min(100, parseInt(parts[i]) || 0) / 100
+          next.push(v)
+          if (v !== root.levels[i]) changed = true
+        }
+        // Skip identical frames (e.g. silence) so nothing repaints.
+        if (changed) root.levels = next
       }
     }
   }

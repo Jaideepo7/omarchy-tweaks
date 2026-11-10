@@ -1,6 +1,8 @@
---- a/Bar.qml
-+++ b/Bar.qml
-@@ -1826,6 +1826,148 @@
+diff --git i/Bar.qml w/Bar.qml
+index 01eeeb8..5a8f5d9 100644
+--- i/Bar.qml
++++ w/Bar.qml
+@@ -2962,6 +2962,150 @@ Item {
  
      HoverHandler { id: moduleHover }
  
@@ -98,9 +100,11 @@
 +        anchors.fill: parent
 +        z: 1000
 +        HoverHandler { id: probeHover }
-+        TapHandler {
++        // Passive: observes presses without taking the grab from the panel's controls.
++        PointHandler {
 +          acceptedButtons: Qt.AllButtons
-+          onPressedChanged: if (pressed) probe.pressed = true
++          grabPermissions: PointerHandler.ApprovesTakeOverByAnything
++          onActiveChanged: if (active) probe.pressed = true
 +        }
 +      }
 +    }
@@ -146,6 +150,6 @@
 +      else hoverOpenTimer.stop()
 +    }
 +
-     BorderSurface {
-       visible: slot.dragSource
-       anchors.fill: parent
+     // The widget at its own size. Lifted out by a drag, it folds away with
+     // its room.
+     Item {

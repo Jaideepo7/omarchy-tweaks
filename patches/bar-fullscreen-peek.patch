@@ -1,6 +1,8 @@
---- a/Bar.qml
-+++ b/Bar.qml
-@@ -40,6 +40,24 @@
+diff --git i/Bar.qml w/Bar.qml
+index 5a8f5d9..5aaa54b 100644
+--- i/Bar.qml
++++ w/Bar.qml
+@@ -42,6 +42,17 @@ Item {
    // killing the entire shell. Hidden panels stay mapped but park off-screen
    // without an exclusion zone; updated by the FileView watcher further down.
    property bool barHidden: false
@@ -12,20 +14,13 @@
 +  property bool fsPeek: false
 +  property int hotEdgeHoverCount: 0
 +  readonly property bool effectiveHidden: barHidden || (fullscreenActive && !fsPeek)
-+  // How far the bar is parked past its edge. Slides while peeking in
-+  // fullscreen (in 180ms, out 120ms); manual hide/show still jumps.
-+  property real parkOffset: effectiveHidden ? barSize : 0
-+  Behavior on parkOffset {
-+    enabled: root.fullscreenActive && !root.barHidden
-+    NumberAnimation {
-+      duration: Style.duration(root.effectiveHidden ? 120 : 180)
-+      easing.type: Easing.OutCubic
-+    }
-+  }
++  // Pointer anywhere over a bar strip. Stock's barHoverCount only counts the
++  // indicator-peek zone (left of the center box), so fullscreen peek keeps its own.
++  property int fsBarHoverCount: 0
    property string home: Quickshell.env("HOME")
    property string stateHome: home + "/.local/state"
    property string omarchyConfigDir: home + "/.config/omarchy"
-@@ -1194,6 +1212,128 @@
+@@ -1660,6 +1671,129 @@ Item {
      }
    }
  
@@ -73,7 +68,7 @@
 +  Timer {
 +    id: fsPeekHideTimer
 +    interval: 350
-+    onTriggered: if (root.hotEdgeHoverCount === 0 && root.barHoverCount === 0) root.fsPeek = false
++    onTriggered: if (root.hotEdgeHoverCount === 0 && root.fsBarHoverCount === 0) root.fsPeek = false
 +  }
 +
 +  // Safety net: hover enter/leave events can still go missing (surface
@@ -101,14 +96,15 @@
 +      if (near || !root.fsPeek) return
 +      root.hotEdgeHoverCount = 0
 +      root.barHoverCount = 0
++      root.fsBarHoverCount = 0
 +      centerSectionRevealTimer.restart()
 +      fsPeekHideTimer.stop()
 +      root.fsPeek = false
 +    } }
 +  }
-+  onBarHoverCountChanged: {
++  onFsBarHoverCountChanged: {
 +    if (!fullscreenActive) return
-+    if (barHoverCount > 0) { fsPeek = true; fsPeekHideTimer.stop() } else fsPeekHideTimer.restart()
++    if (fsBarHoverCount > 0) { fsPeek = true; fsPeekHideTimer.stop() } else fsPeekHideTimer.restart()
 +  }
 +  onHotEdgeHoverCountChanged: {
 +    if (!fullscreenActive) return
@@ -151,39 +147,71 @@
 +    }
 +  }
 +
-   Variants {
-     model: Quickshell.screens
+   // Hyprland's window list does not follow fullscreen on its own, and each
+   // BarPanel reads it to drop its input under a fullscreen window.
+   Connections {
+@@ -1723,7 +1857,7 @@ Item {
+     visible: !remapGuard.remapping && (cutoutWaitOver || !cutoutPending)
+     // An explicit zone instead of Auto: the reserved area stays the strip's
+     // thickness though the window spans its screen.
+-    exclusionMode: root.barHidden ? ExclusionMode.Ignore : ExclusionMode.Normal
++    exclusionMode: (root.barHidden || root.fullscreenActive) ? ExclusionMode.Ignore : ExclusionMode.Normal
+     exclusiveZone: thickness
  
-@@ -1241,7 +1381,7 @@
-     // textures — which measures ~150ms against ~20ms to tear down. Parking
-     // keeps the surface alive, so showing is only a margin change.
-     visible: !remapGuard.remapping
--    exclusionMode: root.barHidden ? ExclusionMode.Ignore : ExclusionMode.Auto
-+    exclusionMode: (root.barHidden || root.fullscreenActive) ? ExclusionMode.Ignore : ExclusionMode.Auto
- 
-     ScreenMoveRemap {
-       id: remapGuard
-@@ -1249,10 +1389,10 @@
-     }
- 
+     // While this window's widget or bar-move drag is live, the whole surface
+@@ -1747,11 +1881,21 @@ Item {
+     // stays on screen: not the strip, however thick a notch floor makes it,
+     // nor the clear rest that a drag takes input on.
+     readonly property real parkDistance: root.vertical ? implicitWidth : implicitHeight
++    // Manual hide parks the whole surface; fullscreen parks just the strip
++    // past the edge and slides it in to peek (in 180ms, out 120ms).
++    property real parkOffset: root.barHidden ? parkDistance : (root.fullscreenActive && !root.fsPeek ? thickness : 0)
++    Behavior on parkOffset {
++      enabled: root.fullscreenActive && !root.barHidden
++      NumberAnimation {
++        duration: Style.duration(root.effectiveHidden ? 120 : 180)
++        easing.type: Easing.OutCubic
++      }
++    }
      margins {
--      top: root.barHidden && root.position === "top" ? -root.barSize : 0
--      bottom: root.barHidden && root.position === "bottom" ? -root.barSize : 0
--      left: root.barHidden && root.position === "left" ? -root.barSize : 0
--      right: root.barHidden && root.position === "right" ? -root.barSize : 0
-+      top: root.position === "top" ? -Math.round(root.parkOffset) : 0
-+      bottom: root.position === "bottom" ? -Math.round(root.parkOffset) : 0
-+      left: root.position === "left" ? -Math.round(root.parkOffset) : 0
-+      right: root.position === "right" ? -Math.round(root.parkOffset) : 0
+-      top: root.barHidden && root.position === "top" ? -barWindow.parkDistance : 0
+-      bottom: root.barHidden && root.position === "bottom" ? -barWindow.parkDistance : 0
+-      left: root.barHidden && root.position === "left" ? -barWindow.parkDistance : 0
+-      right: root.barHidden && root.position === "right" ? -barWindow.parkDistance : 0
++      top: root.position === "top" ? -Math.round(barWindow.parkOffset) : 0
++      bottom: root.position === "bottom" ? -Math.round(barWindow.parkOffset) : 0
++      left: root.position === "left" ? -Math.round(barWindow.parkOffset) : 0
++      right: root.position === "right" ? -Math.round(barWindow.parkOffset) : 0
      }
  
      anchors {
-@@ -1267,7 +1407,7 @@
-     color: root.transparent ? "transparent" : root.background
+@@ -1796,7 +1940,7 @@ Item {
+     color: "transparent"
      surfaceFormat.opaque: false
      WlrLayershell.namespace: "omarchy-bar"
 -    WlrLayershell.layer: WlrLayer.Top
 +    WlrLayershell.layer: root.fullscreenActive ? WlrLayer.Overlay : WlrLayer.Top
  
-     Loader {
-       anchors.fill: parent
+     // Whether the active workspace on this screen holds a real fullscreen
+     // window, which fades the bar out.
+@@ -1813,7 +1957,7 @@ Item {
+     // every layer on the monitor back above whenever a window on any other
+     // workspace leaves fullscreen, or the layer remaps. The invisible strip
+     // would then take the clicks meant for the top of the fullscreen window.
+-    mask: dragActive ? null : (underFullscreen ? noInputRegion : stripInputRegion)
++    mask: dragActive ? null : (underFullscreen && !root.fullscreenActive ? noInputRegion : stripInputRegion)
+ 
+     Region {
+       id: stripInputRegion
+@@ -1838,6 +1982,11 @@ Item {
+         color: root.transparent ? "transparent" : (root.glassy ? root.glassBackground : root.background)
+       }
+ 
++      HoverHandler {
++        onHoveredChanged: root.fsBarHoverCount = Math.max(0, root.fsBarHoverCount + (hovered ? 1 : -1))
++        Component.onDestruction: if (hovered) root.fsBarHoverCount = Math.max(0, root.fsBarHoverCount - 1)
++      }
++
+       Loader {
+         anchors.fill: parent
+         sourceComponent: root.vertical ? verticalBar : horizontalBar

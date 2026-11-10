@@ -19,6 +19,7 @@ Each piece works **on its own**, so take only the parts you want.
 - [Installing](#installing)
 - [Bar widgets](#bar-widgets)
 - [Bar patches](#bar-patches)
+- [Keeping cloned plugins up to date](#keeping-cloned-plugins-up-to-date)
 - [Calendar fix](#calendar-fix)
 - [Kinetic touchpad scrolling](#kinetic-touchpad-scrolling)
 - [Proportional window resize](#proportional-window-resize)
@@ -39,6 +40,7 @@ Each piece works **on its own**, so take only the parts you want.
 | [`jaideep.albumart`](#album-art-jaideepalbumart) | Cover art of the current track. Click it to jump to the player's window and tab | New bar widget |
 | [`bar-hover-open.patch`](#hover-to-open-panels) | Every bar panel opens on hover and closes when you move away | Patch to your bar |
 | [`bar-fullscreen-peek.patch`](#fullscreen-peek) | The bar hides in fullscreen and slides back in when the pointer reaches the top edge | Patch to your bar |
+| [`omarchy-plugin-sync`](#keeping-cloned-plugins-up-to-date) | Merges Omarchy updates into your cloned plugins without losing your edits | Script + update hook |
 | [`calendar-timedrow.patch`](#calendar-fix) | Stops 12-hour times from overlapping the event dot in the calendar | Patch to `tmn73.calendar` |
 | [`kinetic-scroll/`](#kinetic-touchpad-scrolling) | Momentum touchpad scrolling that feels like Firefox | Patched Hyprland plugin |
 | [`omarchy-proportional-grow`](#proportional-window-resize) | Grows or shrinks a floating window while keeping its aspect ratio | Script + keybinding |
@@ -51,6 +53,8 @@ Each piece works **on its own**, so take only the parts you want.
 ## Requirements
 
 - **Omarchy** with the Quickshell-based `omarchy-shell` bar and the Lua Hyprland config.
+  The bar patches are made for **Omarchy 4.5**; the 4.0 versions are in the history at
+  commit `516228f`.
 - **`cava`** for the waveform: `sudo pacman -S cava`
 - **`jq`** for the album-art click (installed with Omarchy).
 - **`base-devel`** and Hyprland headers, only if you build the kinetic-scroll plugin.
@@ -70,7 +74,7 @@ Then follow the section for each piece you want.
 
 > **About `install.sh`:** this is the script I use to put **my own** setup back after updates. It
 > **replaces** `~/.config/hypr/{autostart,bindings,hyprland,input,looknfeel,monitors}.lua`
-> with symlinks to this repo, and it patches a bar named `jaideep.bar`. Don't run it unless you
+> with symlinks to this repo, and it syncs my cloned plugins (`jaideep.*`). Don't run it unless you
 > want my entire config. [What it does](#what-installsh-does) is listed further down.
 
 After changing anything in the bar, restart the shell:
@@ -147,6 +151,9 @@ The patches are stored as patches instead of whole files so that they keep apply
 bar changes upstream. If a hunk fails, your `Bar.qml` has drifted from the version the patch was
 made against. Each patch is self-contained and commented, so it can be copied in by hand.
 
+A clone is a frozen copy: it doesn't get Omarchy's later fixes to the bar. To keep it current
+with your patches on top, see [Keeping cloned plugins up to date](#keeping-cloned-plugins-up-to-date).
+
 ### Hover to open panels
 
 ```bash
@@ -202,7 +209,52 @@ because Quickshell's `hasFullscreen` flag can fall out of sync. While the bar is
 checks `hyprctl cursorpos` every 0.4 s and hides the bar if the pointer is clearly elsewhere,
 in case a leave event was missed.
 
+Since Omarchy 4.5 the bar's surface spans the whole screen and only its strip is drawn, so the
+peek parks just the strip's thickness past the edge, and keeps the strip taking input under
+fullscreen (stock drops all input there) so it can be hovered.
+
 </details>
+
+---
+
+## Keeping cloned plugins up to date
+
+`omarchy plugin clone` gives you a frozen copy, so every Omarchy update leaves it further behind
+the built-in version. `bin/omarchy-plugin-sync` turns each clone into a small git repo:
+
+- a **`stock`** branch holding exactly what `omarchy plugin clone` would produce from the
+  installed Omarchy, one commit per version (it reuses Omarchy's own clone code to make it), and
+- **`main`**, the live files: stock plus your edits.
+
+Each run commits any edits you made, snapshots the current stock plugin, and merges it into
+`main`. If Omarchy changed the same lines you did, the merge is backed out, the plugin is left as
+it was, and you get a notification to merge by hand. Git's `rerere` remembers how you resolved a
+conflict, so the same one resolves itself next time.
+
+```bash
+ln -s "$PWD/bin/omarchy-plugin-sync" ~/.local/bin/
+omarchy-plugin-sync --init ~/.config/omarchy/plugins/$USER.bar   # once per clone
+omarchy-plugin-sync            # sync now
+omarchy-plugin-sync --status   # report only
+```
+
+`--init` treats the clone's current files as your edits on top of today's stock. If the clone is
+older than your Omarchy install, a lot of that "edit" is just old stock code, so it's cleaner to
+re-clone and re-apply your changes before tracking it.
+
+To run it after every update and at login:
+
+```bash
+for h in post-update post-boot; do
+  printf '#!/bin/bash\nomarchy-plugin-sync || true\n' > ~/.config/omarchy/hooks/$h.d/plugin-sync.hook
+  chmod +x ~/.config/omarchy/hooks/$h.d/plugin-sync.hook
+done
+```
+
+Plugins installed from GitHub (anything with a git `origin`) are checked for new commits and
+reported, but only pulled with `omarchy-plugin-sync --pull`, since their code runs unsandboxed in
+the shell. Local edits to them are kept as local commits and rebased; a rebase that conflicts is
+backed out.
 
 ---
 
@@ -357,11 +409,12 @@ in `~/.config/hypr/`. Hyprland reloads when you save.
 ### What `install.sh` does
 
 1. **Symlinks** `hypr/*.lua` into `~/.config/hypr/`, **replacing** whatever is there.
-2. **Symlinks** `bin/omarchy-proportional-grow` into `~/.local/bin/`.
+2. **Symlinks** `bin/omarchy-proportional-grow` and `bin/omarchy-plugin-sync` into `~/.local/bin/`.
 3. **Symlinks** `wireplumber/*.conf` (all three) into `~/.config/wireplumber/wireplumber.conf.d/`.
 4. **Copies** `plugins/*` into `~/.config/omarchy/plugins/`.
-5. **Applies** the patches to `tmn73.calendar` and `jaideep.bar`. A patch that is already
-   applied, or doesn't fit, is skipped.
+5. **Runs** `omarchy-plugin-sync`, which merges Omarchy's latest built-in plugins into my
+   clones (`jaideep.*`). My bar and calendar edits live as commits in those plugin repos, so
+   no patches are applied here.
 6. **Restarts** the shell and WirePlumber, and **reloads** Hyprland.
 
 Running it again is safe. It doesn't build kinetic-scroll; run `kinetic-scroll/build.sh` for
@@ -375,7 +428,8 @@ that.
 .
 ├── install.sh                     # re-applies my full setup (see warning above)
 ├── bin/
-│   └── omarchy-proportional-grow  # proportional floating-window resize
+│   ├── omarchy-proportional-grow  # proportional floating-window resize
+│   └── omarchy-plugin-sync        # merge Omarchy updates into cloned plugins
 ├── plugins/
 │   ├── jaideep.visualizer/        # waveform + media controls
 │   └── jaideep.albumart/          # cover art + jump to player
