@@ -28,5 +28,13 @@ require("default.hypr.toggles")
 -- Add any other personal Hyprland configuration below.
 -- o.window("qemu", { workspace = "5" })
 
+-- Battery fix: Omarchy's omarchy-hw-nvidia-display misdetects this laptop as
+-- NVIDIA-driven (the AMD 890M is PCI class 0x0380 with no boot_vga file), so it
+-- forced GLX + VA-API onto the RTX 4060 for every app, keeping the dGPU awake.
+-- The panel is on the AMD iGPU; route GL/video decode there. Use `prime-run`
+-- to opt a specific app into the NVIDIA GPU.
+hl.env("__GLX_VENDOR_LIBRARY_NAME", "mesa")
+hl.env("LIBVA_DRIVER_NAME", "radeonsi")
+
 -- Added by hyprmoncfg: its generated monitor rules load last, so nothing before this can override the applied layout.
 do local path = (os.getenv("XDG_CONFIG_HOME") or os.getenv("HOME") .. "/.config") .. "/hypr/hyprmoncfg-monitors.lua"; local file = io.open(path, "r"); if file then file:close(); dofile(path) end end
