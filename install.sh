@@ -8,6 +8,10 @@ for f in "$D"/hypr/*.lua; do ln -sfn "$f" ~/.config/hypr/"$(basename "$f")"; don
 mkdir -p ~/.local/bin
 ln -sfn "$D/bin/omarchy-proportional-grow" ~/.local/bin/omarchy-proportional-grow
 
+# WirePlumber: software volume for Bluetooth speakers that ignore absolute volume
+mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+for f in "$D"/wireplumber/*.conf; do ln -sfn "$f" ~/.config/wireplumber/wireplumber.conf.d/"$(basename "$f")"; done
+
 # Whole plugins I wrote myself (copied in, not symlinked: the shell only scans
 # real directories under ~/.config/omarchy/plugins)
 for p in "$D"/plugins/*/; do
@@ -30,3 +34,4 @@ apply_patch ~/.config/omarchy/plugins/jaideep.bar "$D/patches/bar-fullscreen-pee
 
 omarchy-restart-shell 2>/dev/null || true
 hyprctl reload >/dev/null 2>&1 || true
+systemctl --user restart wireplumber 2>/dev/null || true

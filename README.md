@@ -22,6 +22,7 @@ Each piece works **on its own**, so take only the parts you want.
 - [Calendar fix](#calendar-fix)
 - [Kinetic touchpad scrolling](#kinetic-touchpad-scrolling)
 - [Proportional window resize](#proportional-window-resize)
+- [Bluetooth speaker volume](#bluetooth-speaker-volume)
 - [My Hyprland config](#my-hyprland-config)
 - [Repo layout](#repo-layout)
 - [Credits](#credits)
@@ -40,6 +41,7 @@ Each piece works **on its own**, so take only the parts you want.
 | [`calendar-timedrow.patch`](#calendar-fix) | Stops 12-hour times from overlapping the event dot in the calendar | Patch to `tmn73.calendar` |
 | [`kinetic-scroll/`](#kinetic-touchpad-scrolling) | Momentum touchpad scrolling that feels like Firefox | Patched Hyprland plugin |
 | [`omarchy-proportional-grow`](#proportional-window-resize) | Grows or shrinks a floating window while keeping its aspect ratio | Script + keybinding |
+| [`bluetooth-software-volume.conf`](#bluetooth-speaker-volume) | Makes the laptop's volume keys work on Bluetooth speakers that ignore volume commands | WirePlumber config |
 | [`hypr/`](#my-hyprland-config) | My personal Hyprland config, for reference | Config |
 
 ---
@@ -275,6 +277,33 @@ own will both run.
 
 ---
 
+## Bluetooth speaker volume
+
+By default PipeWire uses Bluetooth "absolute volume": instead of turning the audio down itself,
+it asks the speaker to change its own volume. Some speakers (the Creative Pebble V3 here) accept
+the feature but ignore the requests, so the laptop's volume keys and slider do nothing and you
+have to use the knob on the speaker.
+
+`wireplumber/bluetooth-software-volume.conf` turns absolute volume off, so PipeWire scales the
+audio itself:
+
+```bash
+install -Dm644 wireplumber/bluetooth-software-volume.conf \
+  ~/.config/wireplumber/wireplumber.conf.d/bluetooth-software-volume.conf
+systemctl --user restart wireplumber
+```
+
+Set the speaker's own knob high and leave it there: the laptop can now only turn the volume
+down from that level. This applies to **every** Bluetooth output, including headphones. Delete
+the file and restart WirePlumber to undo it.
+
+Both `bluez5.enable-hw-volume = false` and `bluez5.hw-volume = [ ]` are needed; the second on
+its own isn't enough. To check it worked, run `pw-dump` and look at the Bluetooth node's
+`Props`. When `softVolumes` matches `channelVolumes`, PipeWire is controlling the volume itself.
+`pactl` keeps showing the `HW_VOLUME_CTRL` flag either way, so it can't tell you.
+
+---
+
 ## My Hyprland config
 
 `hypr/` is my own config, kept here for reference. Copy any lines you like into your own files
@@ -311,10 +340,11 @@ in `~/.config/hypr/`. Hyprland reloads when you save.
 
 1. **Symlinks** `hypr/*.lua` into `~/.config/hypr/`, **replacing** whatever is there.
 2. **Symlinks** `bin/omarchy-proportional-grow` into `~/.local/bin/`.
-3. **Copies** `plugins/*` into `~/.config/omarchy/plugins/`.
-4. **Applies** the patches to `tmn73.calendar` and `jaideep.bar`. A patch that is already
+3. **Symlinks** `wireplumber/*.conf` into `~/.config/wireplumber/wireplumber.conf.d/`.
+4. **Copies** `plugins/*` into `~/.config/omarchy/plugins/`.
+5. **Applies** the patches to `tmn73.calendar` and `jaideep.bar`. A patch that is already
    applied, or doesn't fit, is skipped.
-5. **Restarts** the shell and **reloads** Hyprland.
+6. **Restarts** the shell and WirePlumber, and **reloads** Hyprland.
 
 Running it again is safe. It doesn't build kinetic-scroll; run `kinetic-scroll/build.sh` for
 that.
@@ -336,6 +366,7 @@ that.
 │   ├── bar-fullscreen-peek.patch  # hide bar in fullscreen, reveal at top edge
 │   └── calendar-timedrow.patch    # tmn73.calendar time/dot overlap fix
 ├── kinetic-scroll/                # patch + build script for hypr-kinetic-scroll
+├── wireplumber/                   # Bluetooth software-volume config
 ├── hypr/                          # my Hyprland Lua config
 └── docs/                          # README images
 ```
