@@ -1,0 +1,127 @@
+#!/bin/bash
+# nvidia-gate: let newly launched apps use the NVIDIA dGPU only on a strong charger.
+#
+# hyprland.lua points every app at gated driver directories:
+#   __EGL_VENDOR_LIBRARY_DIRS=~/.local/state/nvidia-gate/egl
+#   VK_DRIVER_FILES=~/.local/state/nvidia-gate/vulkan
+# Those always hold the AMD/mesa manifests. This script adds the NVIDIA manifests
+# only on the barrel charger or USB-C >= MIN_W, and removes them otherwise, so apps
+# started on battery can't load the NVIDIA driver and wake the card. The check
+# happens when an app loads its GPU driver (usually at launch), however it was
+# launched. Apps already running keep what they loaded.
+#
+#   nvidia-gate          apply once
+#   nvidia-gate watch    apply now and on every power-supply change (systemd service)
+#   nvidia-gate status   show the detected charger and current gate state
+#   nvidia-gate run CMD  run CMD on the NVIDIA GPU regardless of the gate (PRIME offload)
+#
+# NVIDIA_GATE_MIN_W, _SETTLE, _PS, _CHARGE_MODE and _DIR override the threshold,
+# the event settle time, the power-supply sysfs root, the ASUS charge_mode file
+# and the gate directory (used by the tests).
+set -u
+
+MIN_W=${NVIDIA_GATE_MIN_W:-65}
+SETTLE=${NVIDIA_GATE_SETTLE:-2}
+PS=${NVIDIA_GATE_PS:-/sys/class/power_supply}
+CM=${NVIDIA_GATE_CHARGE_MODE:-/sys/class/firmware-attributes/asus-armoury/attributes/charge_mode/current_value}
+GATE=${NVIDIA_GATE_DIR:-$HOME/.local/state/nvidia-gate}
+EGL_D=/usr/share/glvnd/egl_vendor.d
+VK_D=/usr/share/vulkan/icd.d
+
+rd() { local v; v=$(cat "$1" 2>/dev/null) && echo "${v:-0}" || echo 0; }
+
+usbc_watts() {  # highest wattage any online UCSI (USB-C) supply reports
+  local s w usb=0
+  for s in "$PS"/ucsi-source-psy-*; do
+    [ "$(rd "$s/online")" = 1 ] || continue
+    w=$(( $(rd "$s/voltage_max") / 1000 * ($(rd "$s/current_max") / 1000) / 1000000 ))
+    (( w > usb )) && usb=$w
+  done
+  echo "$usb"
+}
+
+# Prints the charger wattage (0 = on battery). The ASUS firmware's charge_mode is
+# trusted first: 1/3 = barrel (200 W adapter, reports no wattage), 2 = USB-C.
+# The UCSI driver on this laptop times out and drops readings, so on USB-C the
+# highest wattage seen is remembered ($GATE/usbc_watts) until the charger goes.
+# Without charge_mode (0 or missing, e.g. firmware lagging the plug event), fall
+# back to sysfs: a USB-C reading only counts if ACAD is online or the battery
+# isn't discharging (stale UCSI after unplug), else ACAD online = barrel.
+charger_watts() {
+  local mode usb sticky acad bat
+  mode=$(rd "$CM")
+  usb=$(usbc_watts)
+  case "$mode" in
+    1|3) echo 200; return ;;
+    2) sticky=$(rd "$GATE/usbc_watts"); (( sticky > usb )) && usb=$sticky; echo "$usb"; return ;;
+  esac
+  acad=$(rd "$PS/ACAD/online")
+  bat=$(cat "$PS"/BAT*/status 2>/dev/null | head -1)
+  if (( usb > 0 )) && { [ "$acad" = 1 ] || [ "$bat" != Discharging ]; }; then
+    echo "$usb"
+  elif [ "$acad" = 1 ]; then
+    echo 200
+  else
+    echo 0
+  fi
+}
+
+current_state() { [ -e "$GATE/vulkan/nvidia_icd.json" ] && echo allow || echo block; }
+
+apply() {
+  local w state prev
+  mkdir -p "$GATE/egl" "$GATE/vulkan"
+  ln -sfn "$EGL_D/50_mesa.json" "$GATE/egl/50_mesa.json"
+  ln -sfn "$VK_D/radeon_icd.json" "$GATE/vulkan/radeon_icd.json"
+
+  w=$(charger_watts)
+  if [ "$(rd "$CM")" = 2 ] && (( w > 0 )); then echo "$w" > "$GATE/usbc_watts"
+  elif [ "$(rd "$CM")" != 2 ]; then rm -f "$GATE/usbc_watts"; fi
+  if (( w >= MIN_W )); then state=allow; else state=block; fi
+  prev=$(current_state)
+  [ "$state" = "$prev" ] && [ "${1:-}" != announce ] && return
+
+  if [ "$state" = allow ]; then
+    ln -sfn "$EGL_D/10_nvidia.json" "$GATE/egl/10_nvidia.json"
+    ln -sfn "$VK_D/nvidia_icd.json" "$GATE/vulkan/nvidia_icd.json"
+  else
+    rm -f "$GATE/egl/10_nvidia.json" "$GATE/vulkan/nvidia_icd.json"
+  fi
+  echo "charger ${w}W -> NVIDIA ${state}ed for new apps"
+  [ "$state" = "$prev" ] && return
+
+  if [ "$state" = allow ]; then
+    notify-send -a nvidia-gate "NVIDIA GPU available" "Charger ${w}W: newly launched apps may use the RTX 4060." 2>/dev/null
+  else
+    notify-send -a nvidia-gate "NVIDIA GPU blocked" "$( (( w > 0 )) && echo "Charger ${w}W (< ${MIN_W}W)" || echo "On battery"): new apps use the AMD GPU only." 2>/dev/null
+  fi
+}
+
+case "${1:-}" in
+  watch)
+    apply announce
+    # Plugging in fires a burst of events while the firmware and UCSI settle;
+    # wait for SETTLE quiet seconds so one plug gives one decision.
+    udevadm monitor --udev --subsystem-match=power_supply | while read -r line; do
+      case "$line" in UDEV*) ;; *) continue ;; esac
+      while read -t "$SETTLE" -r _; do :; done
+      apply
+    done
+    ;;
+  status)
+    echo "charger: $(charger_watts)W (threshold ${MIN_W}W, charge_mode $(rd "$CM"), usb-c now $(usbc_watts)W)"
+    echo "gate:    $(current_state)"
+    echo "egl:     $(ls "$GATE/egl" 2>/dev/null | tr '\n' ' ')"
+    echo "vulkan:  $(ls "$GATE/vulkan" 2>/dev/null | tr '\n' ' ')"
+    echo "dGPU:    $(cat /sys/bus/pci/devices/0000:64:00.0/power/runtime_status 2>/dev/null)"
+    ;;
+  run)
+    shift
+    [ $# -gt 0 ] || { echo "usage: nvidia-gate run CMD [ARGS...]" >&2; exit 2; }
+    exec env -u __EGL_VENDOR_LIBRARY_DIRS -u __EGL_VENDOR_LIBRARY_FILENAMES -u VK_DRIVER_FILES \
+      __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
+      __VK_LAYER_NV_optimus=NVIDIA_only "$@"
+    ;;
+  "") apply ;;
+  *) echo "usage: nvidia-gate [watch|status|run CMD...]" >&2; exit 2 ;;
+esac
