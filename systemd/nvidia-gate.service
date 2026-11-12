@@ -1,0 +1,12 @@
+[Unit]
+Description=Let new apps use the NVIDIA dGPU only on a >=65W charger
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/nvidia-gate watch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

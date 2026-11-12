@@ -8,6 +8,13 @@ for f in "$D"/hypr/*.lua; do ln -sfn "$f" ~/.config/hypr/"$(basename "$f")"; don
 mkdir -p ~/.local/bin
 ln -sfn "$D/bin/omarchy-proportional-grow" ~/.local/bin/omarchy-proportional-grow
 ln -sfn "$D/bin/omarchy-plugin-sync" ~/.local/bin/omarchy-plugin-sync
+ln -sfn "$D/bin/nvidia-gate" ~/.local/bin/nvidia-gate
+
+# NVIDIA gate: new apps may use the dGPU only on a >=65W charger
+mkdir -p ~/.config/systemd/user
+ln -sfn "$D/systemd/nvidia-gate.service" ~/.config/systemd/user/nvidia-gate.service
+systemctl --user daemon-reload 2>/dev/null || true
+systemctl --user enable --now nvidia-gate.service 2>/dev/null || true
 
 # WirePlumber: Bluetooth software volume + A2DP auto-connect, KEF USB no-suspend
 mkdir -p ~/.config/wireplumber/wireplumber.conf.d
