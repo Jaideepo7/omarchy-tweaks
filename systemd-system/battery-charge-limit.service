@@ -1,0 +1,13 @@
+[Unit]
+Description=Limit battery charging to 80%
+# ASUS firmware resets the limit to 100% on boot (and on some models after
+# sleep), and asusd doesn't auto-start on the ProArt P16, so reapply it here.
+After=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target
+ConditionPathExists=/sys/class/power_supply/BAT1/charge_control_end_threshold
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo 80 > /sys/class/power_supply/BAT1/charge_control_end_threshold'
+
+[Install]
+WantedBy=multi-user.target suspend.target hibernate.target hybrid-sleep.target suspend-then-hibernate.target

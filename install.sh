@@ -16,6 +16,14 @@ ln -sfn "$D/systemd/nvidia-gate.service" ~/.config/systemd/user/nvidia-gate.serv
 systemctl --user daemon-reload 2>/dev/null || true
 systemctl --user enable --now nvidia-gate.service 2>/dev/null || true
 
+# Battery: stop charging at 80% (system unit, reapplied at boot and after sleep).
+# Copied, not symlinked: system units shouldn't live in a user-writable repo.
+if ! cmp -s "$D/systemd-system/battery-charge-limit.service" /etc/systemd/system/battery-charge-limit.service; then
+  sudo install -m 644 "$D/systemd-system/battery-charge-limit.service" /etc/systemd/system/
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now battery-charge-limit.service
+fi
+
 # WirePlumber: Bluetooth software volume + A2DP auto-connect, KEF USB no-suspend
 mkdir -p ~/.config/wireplumber/wireplumber.conf.d
 for f in "$D"/wireplumber/*.conf; do ln -sfn "$f" ~/.config/wireplumber/wireplumber.conf.d/"$(basename "$f")"; done
