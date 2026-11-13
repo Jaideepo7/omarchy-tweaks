@@ -1,0 +1,16 @@
+diff --git a/Panel.qml b/Panel.qml
+index 9a4b52c..b1f1d8c 100644
+--- a/Panel.qml
++++ b/Panel.qml
+@@ -920,6 +920,11 @@ Panel {
+     owner: root.barIdentity
+     bar: root.bar
+     open: root.opened
++    // mine: Suburbs glass, floating off the bar like the notification cards
++    gap: Math.max(Commons.Style.gapsOut, Commons.Style.space(10))
++    margin: Math.max(Commons.Style.gapsOut, Commons.Style.space(10))
++    borderSpec: Commons.Border.flat(Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.38), 1)
++    GlassCard {}
+     centerOnBar: true
+     focusTarget: keyFocus
+     contentWidth: panel.fittedContentWidth(columns.width + panel.padding * 2

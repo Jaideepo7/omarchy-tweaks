@@ -80,10 +80,12 @@ o.window(".*", { idle_inhibit = "fullscreen" })
 -- `opaque` ignores kitty's own translucent background (theme background_opacity).
 o.window("org.omarchy.screensaver", { opacity = "1.0 override 1.0 override", opaque = true, no_blur = true })
 
--- mine: frost the Super+Alt+Space app launcher like the other glass shell
--- surfaces (window-glassy's blur list leaves out omarchy-dock-apps).
+-- >>> omarchy-tweaks glass >>>
+-- Blur behind the shell's frosted glass cards (glass/apply.sh). ignore_alpha
+-- 0.3 keeps fully see-through pixels sharp; the cards stay above it.
 hl.layer_rule({
-  match = { namespace = "^omarchy-dock-apps$" },
+  match = { namespace = "^(omarchy-notifications|omarchy-keyboard-panel|omarchy-menu|omarchy-dock-apps|omarchy-clipboard|omarchy-emojis|omarchy-reminders|omarchy-polkit|omarchy-osd)$" },
   blur = true,
   ignore_alpha = 0.3,
 })
+-- <<< omarchy-tweaks glass <<<

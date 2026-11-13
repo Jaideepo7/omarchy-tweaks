@@ -49,6 +49,9 @@ done
 # post-update/post-boot hooks. The calendar fix lives as a local commit in its repo.
 command -v omarchy-plugin-sync >/dev/null && omarchy-plugin-sync || true
 
+# Frosted glass on notifications, panels, menus and pop-ups (skips what's applied)
+"$D"/glass/apply.sh
+
 omarchy-restart-shell 2>/dev/null || true
 hyprctl reload >/dev/null 2>&1 || true
 systemctl --user restart wireplumber 2>/dev/null || true

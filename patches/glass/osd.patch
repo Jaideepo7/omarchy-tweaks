@@ -1,0 +1,13 @@
+diff --git a/Osd.qml b/Osd.qml
+index c80c2e5..5eea6fc 100644
+--- a/Osd.qml
++++ b/Osd.qml
+@@ -135,6 +135,8 @@ Item {
+ 
+     BorderSurface {
+       id: card
++      // mine: Suburbs glass, matching the notification cards
++      GlassCard { target: card; radius: 18; base: Commons.Color.popups.background; text: Commons.Color.popups.text }
+       width: card.borderLeft + root.pad + root.contentWidth + root.pad + card.borderRight
+       height: card.borderTop + root.pad + Style.font.displayLarge + root.pad + card.borderBottom
+       anchors.horizontalCenter: parent.horizontalCenter

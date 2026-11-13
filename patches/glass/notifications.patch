@@ -1,0 +1,195 @@
+diff --git a/Service.qml b/Service.qml
+index cdeff11..671b047 100644
+--- a/Service.qml
++++ b/Service.qml
+@@ -72,7 +72,10 @@ Item {
+   readonly property bool barVertical: barPosition === "left" || barPosition === "right"
+   readonly property int defaultBarSize: barVertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
+   function marginsFor(screenName) {
+-    return Delivery.deckMargins(barPosition, Delivery.barThickness(barRef, screenName, defaultBarSize), Style.gapsOut)
++    // mine: glass cards float at least 10px off the bar and screen edge,
++    // even with Hyprland's gaps_out at 0.
++    return Delivery.deckMargins(barPosition, Delivery.barThickness(barRef, screenName, defaultBarSize),
++                                Math.max(Style.gapsOut, Style.space(10)))
+   }
+   readonly property int notificationWidth: Style.space(380)
+ 
+diff --git a/Toast.qml b/Toast.qml
+index 025f99d..e63ffb6 100644
+--- a/Toast.qml
++++ b/Toast.qml
+@@ -75,6 +75,28 @@ Item {
+   readonly property color bodyColor: Qt.darker(Commons.Color.notifications.text, 1.15)
+   readonly property color accentColor: critical ? Commons.Color.urgent
+                                                : (row.urgency === 0 ? dimColor : Commons.Color.notifications.countdown)
++  // mine: "Suburbs glass" palette, derived from the theme so it follows theme changes.
++  readonly property real glassRadius: 22
++  // Test switch: true = neutral frosted glass (the first mockups' option A),
++  // false = accent-tinted "Suburbs glass". Keep in step with GlassCard.qml's frost.
++  readonly property bool glassFrost: true
++  readonly property real tileRadius: 12
++  function withAlpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
++  function mixed(a, b, t, alpha) {
++    return Qt.rgba(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, alpha)
++  }
++  readonly property color glassTop: glassFrost
++      ? (critical ? mixed(Commons.Color.notifications.background, Commons.Color.urgent, 0.30, 0.62)
++                  : mixed(Commons.Color.notifications.background, Commons.Color.notifications.text, 0.18, 0.58))
++      : critical
++      ? mixed(Commons.Color.notifications.background, Commons.Color.urgent, 0.35, 0.68)
++      : mixed(Commons.Color.notifications.background, Commons.Color.accent, 0.30, 0.64)
++  readonly property color glassBottom: glassFrost
++      ? mixed(Commons.Color.notifications.background, Commons.Color.notifications.text, 0.14, 0.55)
++      : withAlpha(Commons.Color.notifications.background, 0.61)
++  // Frost keeps the accent out of the chrome; an urgent card still says so.
++  readonly property color chromeTint: glassFrost && !critical ? Commons.Color.notifications.text : glassTint
++  readonly property color glassTint: critical ? Commons.Color.urgent : Commons.Color.accent
+   readonly property bool hasBody: String(row.body || "").length > 0
+   readonly property bool redacted: Store.redacted(row)
+   // Omarchy's own toasts and bare notify-send calls name no source worth a
+@@ -223,10 +245,35 @@ Item {
+     id: plate
+     width: body.width
+     height: body.height
+-    radius: Style.cornerRadius
+-    color: Commons.Color.notifications.background
+-    borderSpec: Border.surfaceSpec("notifications", "border", Commons.Color.notifications.border,
+-                                   Math.max(1, Style.space(2)))
++    // mine: "Suburbs glass". Rounded, see-through and tinted with the theme's
++    // accent; Hyprland's layer blur (window-glassy) frosts what is behind it.
++    // Keep every alpha >= 0.3: the layer rule's ignore_alpha skips blur below that.
++    radius: card.glassRadius
++    color: "transparent"
++    gradient: Gradient {
++      GradientStop { position: 0.0; color: card.glassTop }
++      GradientStop { position: 0.55; color: card.glassBottom }
++      GradientStop { position: 1.0; color: card.glassBottom }
++    }
++    borderSpec: Border.flat(card.glassFrost ? card.withAlpha(Commons.Color.notifications.text, 0.16)
++                                            : card.withAlpha(Commons.Color.notifications.border, 0.38), 1)
++  }
++
++  // mine: a faint highlight along the top edge, like light catching glass.
++  Item {
++    x: plate.borderLeft
++    y: plate.borderTop
++    width: plate.width - plate.borderLeft - plate.borderRight
++    height: card.glassRadius * 0.6
++    clip: true
++    Rectangle {
++      width: parent.width
++      height: plate.height - plate.borderTop - plate.borderBottom
++      radius: card.glassRadius - 1
++      color: "transparent"
++      border.width: 1
++      border.color: card.withAlpha(Commons.Color.notifications.text, card.glassFrost ? 0.14 : 0.09)
++    }
+   }
+ 
+   // The keyboard's card is tinted with the theme's hover fill, buttons and all.
+@@ -234,6 +281,7 @@ Item {
+     anchors.fill: plate
+     anchors { leftMargin: plate.borderLeft; rightMargin: plate.borderRight
+               topMargin: plate.borderTop; bottomMargin: plate.borderBottom }
++    radius: card.glassRadius - 1  // mine: follow the rounded plate
+     visible: card.selected
+     color: Style.hoverFillFor(Commons.Color.notifications.text, Commons.Color.accent)
+   }
+@@ -306,17 +354,24 @@ Item {
+         readonly property bool photo: best !== "" && best === sent
+         readonly property bool mono: !photo && Icons.isSymbolic(best)
+ 
++        // mine: letters, app icons and Omarchy glyphs sit in an accent-tinted
++        // rounded tile; a sender's photo fills the tile shape instead.
++        readonly property bool tiled: lettered || (pictured && !photo) || (glyphed && !compact)
++
+         Rectangle {
+           anchors.fill: parent
+-          visible: thumb.lettered
+-          radius: Style.cornerRadius
+-          color: Style.normalFillFor(Commons.Color.notifications.text, card.accentColor, Commons.Color.urgent)
++          visible: thumb.tiled
++          radius: card.tileRadius
++          color: card.withAlpha(card.chromeTint, card.glassFrost ? 0.12 : 0.22)
++          border.width: 1
++          border.color: card.withAlpha(card.chromeTint, card.glassFrost ? 0.22 : 0.45)
+ 
+           Text {
+             textFormat: Text.PlainText
+             anchors.centerIn: parent
++            visible: thumb.lettered
+             text: String(card.row.source || card.row.app || "?").substring(0, 1).toUpperCase()
+-            color: card.dimColor
++            color: Commons.Color.notifications.text
+             font.family: Style.font.family
+             font.pixelSize: Style.font.body
+             font.weight: Font.DemiBold
+@@ -331,12 +386,13 @@ Item {
+           text: String(card.row.glyph || "")
+           color: Commons.Color.notifications.text
+           font.family: Delivery.omarchyGlyph(card.row.glyph) ? "omarchy" : Style.font.family
+-          font.pixelSize: (thumb.compact ? Style.font.icon : Style.font.displayLarge)
++          font.pixelSize: (thumb.compact ? Style.font.icon : Math.round(thumb.slot * 0.5))  // mine: fit the tile
+         }
+ 
+         Image {
+           id: picture
+           anchors.fill: parent
++          anchors.margins: thumb.photo ? 0 : Math.round(thumb.slot * 0.2)  // mine: app icons inset in the tile
+           visible: thumb.pictured
+           source: card.reloading ? "" : thumb.best
+           onStatusChanged: if (status === Image.Error && thumb.failed < thumb.sources.length) thumb.failed += 1
+@@ -351,7 +407,7 @@ Item {
+           // A one-colour icon is brightened to a silhouette and tinted with the
+           // theme's text colour, keeping its anti-aliased edge. A photo is
+           // rounded like the card, only when the theme rounds at all.
+-          readonly property bool rounded: thumb.photo && Style.cornerRadius > 0
++          readonly property bool rounded: thumb.photo  // mine: always round photos to the tile
+           opacity: thumb.mono ? 0.85 : 1
+           layer.enabled: visible && (thumb.mono || rounded)
+           layer.effect: MultiEffect {
+@@ -368,7 +424,7 @@ Item {
+           anchors.fill: parent
+           visible: false
+           layer.enabled: true
+-          radius: Style.cornerRadius
++          radius: card.tileRadius  // mine
+           color: "black"
+         }
+       }
+@@ -396,7 +452,7 @@ Item {
+                    - Style.space(8))
+             text: card.redacted ? I18n.t("notifications.redactedSummary") : String(card.row.summary || "")
+             color: Commons.Color.notifications.text
+-            font.family: "Liberation Sans"
++            font.family: Style.font.family  // mine: Omarchy monospace
+             font.pixelSize: Style.font.title
+             font.bold: true
+             wrapMode: Text.Wrap
+@@ -447,7 +503,7 @@ Item {
+                 id: stamp
+                 anchors.centerIn: parent
+                 text: card.ago()
+-                color: card.dimColor
++                color: card.glassFrost ? card.dimColor : card.glassTint  // mine: accent time stamp (dim when frosted)
+                 opacity: card.hovered ? 0 : 1
+                 visible: opacity > 0.01
+                 font.family: Style.font.family
+@@ -489,7 +545,7 @@ Item {
+ 
+         FontMetrics {
+           id: metrics
+-          font.family: "Liberation Sans"
++          font.family: Style.font.family  // mine: Omarchy monospace
+           font.pixelSize: Style.font.title
+         }
+ 
+@@ -507,7 +563,7 @@ Item {
+           text: card.redacted ? I18n.t("notifications.redactedBody") : String(card.row.bodyRich || "")
+           color: card.bodyColor
+           linkColor: Commons.Color.notifications.countdown
+-          font.family: "Liberation Sans"
++          font.family: Style.font.family  // mine: Omarchy monospace
+           font.pixelSize: Style.font.title
+           wrapMode: Text.Wrap
+           maximumLineCount: card.bodyLines

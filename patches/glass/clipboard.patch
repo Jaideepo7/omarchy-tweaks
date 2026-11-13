@@ -1,0 +1,22 @@
+diff --git a/Clipboard.qml b/Clipboard.qml
+index bb2b4c0..1c953c0 100644
+--- a/Clipboard.qml
++++ b/Clipboard.qml
+@@ -30,7 +30,7 @@ Item {
+   property color scrim: Commons.Color.menu.scrim
+   property color selectedBackground: Commons.Color.menu.selectedBackground
+   property color selectedText: Commons.Color.menu.selectedText
+-  readonly property int cornerRadius: Style.cornerRadius
++  readonly property int cornerRadius: Math.max(Style.cornerRadius, 10)  // mine: rounder rows to sit in the glass card
+   property string fontFamily: Style.font.menuFamily
+   property int contentMargin: Style.spacing.panelPadding
+   property int headerHeight: Math.max(Style.space(34), Style.font.title + Style.spacing.controlPaddingY * 2)
+@@ -336,6 +336,8 @@ Item {
+ 
+     BorderSurface {
+       id: card
++      // mine: Suburbs glass, matching the notification cards
++      GlassCard { target: card; radius: 24; base: root.background; text: Commons.Color.menu.text }
+       width: root.cardWidth
+       height: root.cardHeight
+       radius: root.cornerRadius

@@ -18,7 +18,7 @@ Item {
   property Item target: null
   // Test switch: true = neutral frosted glass (the first mockups' option A),
   // false = accent-tinted "Suburbs glass". Same value in every copy and in
-  // jaideep.notifications Toast.qml (glassFrost).
+  // the notifications plugin's Toast.qml (glassFrost).
   property bool frost: true
   property real radius: 20
   property real opacityTop: 0.73

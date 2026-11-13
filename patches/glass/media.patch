@@ -1,0 +1,15 @@
+diff --git a/BarWidget.qml b/BarWidget.qml
+index f0dd4fc..da68d5b 100644
+--- a/BarWidget.qml
++++ b/BarWidget.qml
+@@ -113,6 +113,10 @@ BarWidget {
+     bar: root.bar
+     owner: root
+     open: root.popupOpen
++    // mine: Suburbs glass, floating off the bar like the notification cards
++    margin: Math.max(Commons.Style.gapsOut, Commons.Style.space(10))
++    borderSpec: Commons.Border.flat(Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.38), 1)
++    GlassCard { radius: 16 }
+     contentWidth: popup.fittedContentWidth(Style.space(320))
+     contentHeight: popup.fittedContentHeight(column.implicitHeight)
+ 

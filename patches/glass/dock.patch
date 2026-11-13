@@ -1,0 +1,68 @@
+diff --git a/AppGrid.qml b/AppGrid.qml
+index 53c771d..6947956 100644
+--- a/AppGrid.qml
++++ b/AppGrid.qml
+@@ -192,10 +192,12 @@ Item {
+ 
+     BorderSurface {
+       id: card
++      // mine: Suburbs glass, matching the notification cards
++      GlassCard { target: card; radius: 24; base: Commons.Color.menu.background; text: Commons.Color.menu.text }
+       width: root.cardWidth
+       height: root.cardHeight
+       anchors.centerIn: parent
+-      radius: Style.cornerRadius
++      radius: Math.max(Style.cornerRadius, 10)  // mine: rounder, to sit in the glass card
+       color: Commons.Color.menu.background
+       borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, root.borderWidth)
+       padding: root.contentMargin
+@@ -282,7 +284,7 @@ Item {
+           x: root.cellGutter
+           width: parent.width - root.cellGutter * 2
+           height: root.headerHeight
+-          radius: Style.cornerRadius
++          radius: Math.max(Style.cornerRadius, 10)  // mine: rounder, to sit in the glass card
+           color: Util.alpha(Commons.Color.menu.text, 0.06)
+ 
+           Text {
+@@ -348,7 +350,7 @@ Item {
+                 anchors.centerIn: label
+                 width: Math.min(cell.width - root.cellGutter * 2, label.contentWidth + Style.spacing.md * 2)
+                 height: label.contentHeight + Style.spacing.xs * 2
+-                radius: Style.cornerRadius
++                radius: Math.max(Style.cornerRadius, 10)  // mine: rounder, to sit in the glass card
+                 color: cell.selected ? Commons.Color.menu.selectedBackground : "transparent"
+               }
+ 
+@@ -446,7 +448,7 @@ Item {
+         ? Math.max(Style.gapsOut, root.menuPoint.x - width)
+         : Math.min(root.menuPoint.x, panel.width - width - Style.gapsOut)
+       y: Math.min(root.menuPoint.y, panel.height - height - Style.gapsOut)
+-      radius: Style.cornerRadius
++      radius: Math.max(Style.cornerRadius, 10)  // mine: rounder, to sit in the glass card
+       color: Commons.Color.popups.background
+       borderSpec: Border.surfaceSpec("popups", "border", Commons.Color.popups.border, Style.normalBorderWidth)
+       padding: Style.spacing.sm
+@@ -492,7 +494,7 @@ Item {
+ 
+     width: parent ? parent.width : 0
+     height: visible ? Style.spacing.popupRowHeight : 0
+-    radius: Style.cornerRadius
++    radius: Math.max(Style.cornerRadius, 10)  // mine: rounder, to sit in the glass card
+     color: rowMouse.containsMouse ? Style.hoverFill : "transparent"
+ 
+     Text {
+diff --git a/manifest.json b/manifest.json
+index 1e41c0d..8f5a15c 100644
+--- a/manifest.json
++++ b/manifest.json
+@@ -6,7 +6,8 @@
+   "author": "Omarchy",
+   "description": "App dock shown on floating workspaces",
+   "kinds": [
+-    "service"
++    "service",
++    "menu"
+   ],
+   "entryPoints": {
+     "service": "Dock.qml"

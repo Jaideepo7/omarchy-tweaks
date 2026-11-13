@@ -1,0 +1,22 @@
+diff --git a/PolkitAgent.qml b/PolkitAgent.qml
+index a2d662b..ac3dcc7 100644
+--- a/PolkitAgent.qml
++++ b/PolkitAgent.qml
+@@ -20,7 +20,7 @@ Item {
+   property color borderError: Commons.Color.polkit.borderError
+   property var borderSpec: Border.surfaceSpec("polkit", errorFlash ? "border-error" : "border", errorFlash ? borderError : border, Math.max(1, Style.space(2)), "border-alpha")
+   property color scrim: Commons.Color.polkit.scrim
+-  readonly property int cornerRadius: Style.cornerRadius
++  readonly property int cornerRadius: Math.max(Style.cornerRadius, 10)  // mine: rounder rows to sit in the glass card
+   property int contentMargin: Style.spacing.panelPadding
+   property int fieldHeight: Math.max(Style.space(42), Style.spacing.controlHeight)
+ 
+@@ -245,6 +245,8 @@ Item {
+ 
+     BorderSurface {
+       id: card
++      // mine: Suburbs glass, matching the notification cards
++      GlassCard { target: card; radius: 24; base: root.background; text: Commons.Color.polkit.text }
+       width: root.cardWidth
+       height: root.cardHeight
+       radius: root.cornerRadius

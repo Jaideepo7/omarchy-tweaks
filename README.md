@@ -21,6 +21,7 @@ Each piece works **on its own**, so take only the parts you want.
 - [Bar patches](#bar-patches)
 - [Keeping cloned plugins up to date](#keeping-cloned-plugins-up-to-date)
 - [Calendar fix](#calendar-fix)
+- [Frosted glass](#frosted-glass)
 - [Kinetic touchpad scrolling](#kinetic-touchpad-scrolling)
 - [Proportional window resize](#proportional-window-resize)
 - [Bluetooth speaker volume](#bluetooth-speaker-volume)
@@ -42,6 +43,7 @@ Each piece works **on its own**, so take only the parts you want.
 | [`bar-fullscreen-peek.patch`](#fullscreen-peek) | The bar hides in fullscreen and slides back in when the pointer reaches the top edge | Patch to your bar |
 | [`omarchy-plugin-sync`](#keeping-cloned-plugins-up-to-date) | Merges Omarchy updates into your cloned plugins without losing your edits | Script + update hook |
 | [`calendar-timedrow.patch`](#calendar-fix) | Stops 12-hour times from overlapping the event dot in the calendar | Patch to `tmn73.calendar` |
+| [`glass/`](#frosted-glass) | Notifications, bar panels, menus, the app launcher and pop-ups become rounded frosted glass that follows your theme | Patches + script |
 | [`kinetic-scroll/`](#kinetic-touchpad-scrolling) | Momentum touchpad scrolling that feels like Firefox | Patched Hyprland plugin |
 | [`omarchy-proportional-grow`](#proportional-window-resize) | Grows or shrinks a floating window while keeping its aspect ratio | Script + keybinding |
 | [`bluetooth-software-volume.conf`](#bluetooth-speaker-volume) | Makes the laptop's volume keys work on Bluetooth speakers that ignore volume commands | WirePlumber config |
@@ -273,6 +275,66 @@ omarchy restart shell
 
 ---
 
+## Frosted glass
+
+Gives the shell a macOS-style frosted look. Notifications, every bar panel (calendar, Wi-Fi,
+Bluetooth, audio, display, power, Agents, Tailscale), the media controls, the Omarchy menu
+(Super+Space), the app launcher (Super+Alt+Space), the clipboard and emoji pickers, the reminder
+dialog, the password prompt and the volume/brightness pop-up all become rounded, see-through
+cards with Hyprland's blur behind them.
+
+```bash
+glass/apply.sh
+```
+
+- **Rounded and floating.** Cards have 20 to 24px corners (22px for notifications), and panels
+  and notifications float 10px off the bar and screen edge.
+- **Frosted, not tinted.** The fill is your theme's background lifted toward its text colour, a
+  smoky grey that keeps the theme's hue, with a soft edge and a faint highlight along the top.
+- **Follows your theme.** No colour is hard-coded: switch themes and the glass changes with it.
+  Urgent notifications keep the theme's urgent colour.
+- **Rows round to 10px** inside the menus, so highlighted rows sit in the rounded card.
+- **Behaviour is unchanged.** Stacking, actions, hover-to-open, keyboard navigation and
+  animations work as before.
+
+The script only touches plugins you use. For each one it makes your own clone if you don't have
+one yet (like `omarchy plugin clone`), copies in `glass/GlassCard.qml` and applies the matching
+patch from `patches/glass/`. It also adds a marked blur rule for the shell's layers to
+`~/.config/hypr/looknfeel.lua`, then restarts the shell. Running it again skips anything already
+applied. If a patch reports `FAILED`, that plugin has drifted from the version the patch was
+made against; each patch is small enough to apply by hand.
+
+Blur strength is Hyprland's global `decoration.blur` setting, shared with see-through windows.
+If the cards look see-through but not frosted, turn on blur with
+`omarchy hyprland window transparency glassy`.
+
+<details>
+<summary>How it works</summary>
+
+Omarchy draws each card as a `BorderSurface` inside shared components (`KeyboardPanel`,
+`PopupCard`) that live in `/usr/share` and have no setting for corner radius or fill.
+`GlassCard.qml` binds the card's radius, gradient fill and border from the outside. Where the
+plugin can name its card it points straight at it; inside `KeyboardPanel` and `PopupCard`,
+which park plugin children in a wrapper item, it searches the window for the card. The
+notification cards draw their own plate, so `notifications.patch` restyles it in place.
+
+Cloned plugins get a narrower shell API than built-in ones, and only `menu`-kind plugins are
+given the list of installed apps. The dock clone, which draws the app launcher, would show no
+apps, so `dock.patch` adds `menu` to its manifest's kinds. It has no menu entry point, so the
+panel loader skips it.
+
+Each card's fill stays at least 30% opaque, because the blur rule's `ignore_alpha` leaves
+anything more see-through unblurred.
+
+</details>
+
+**Undo:** for each plugin, `patch -R -p1 -d ~/.config/omarchy/plugins/$USER.<name> < patches/glass/<name>.patch`
+(calendar: `tmn73.calendar`), delete the `omarchy-tweaks glass` block from `looknfeel.lua`, and
+restart the shell. To go back to the built-in plugins entirely, delete the clones and
+re-enable the `omarchy.*` originals.
+
+---
+
 ## Kinetic touchpad scrolling
 
 This is a patch to [savonovv/hypr-kinetic-scroll](https://github.com/savonovv/hypr-kinetic-scroll),
@@ -415,7 +477,9 @@ in `~/.config/hypr/`. Hyprland reloads when you save.
 5. **Runs** `omarchy-plugin-sync`, which merges Omarchy's latest built-in plugins into my
    clones (`jaideep.*`). My bar and calendar edits live as commits in those plugin repos, so
    no patches are applied here.
-6. **Restarts** the shell and WirePlumber, and **reloads** Hyprland.
+6. **Runs** `glass/apply.sh` for the [frosted glass](#frosted-glass), which skips anything
+   already applied.
+7. **Restarts** the shell and WirePlumber, and **reloads** Hyprland.
 
 Running it again is safe. It doesn't build kinetic-scroll; run `kinetic-scroll/build.sh` for
 that.
@@ -436,7 +500,11 @@ that.
 ├── patches/
 │   ├── bar-hover-open.patch       # hover to open / auto-close bar panels
 │   ├── bar-fullscreen-peek.patch  # hide bar in fullscreen, reveal at top edge
-│   └── calendar-timedrow.patch    # tmn73.calendar time/dot overlap fix
+│   ├── calendar-timedrow.patch    # tmn73.calendar time/dot overlap fix
+│   └── glass/                     # one frosted-glass patch per shell plugin
+├── glass/
+│   ├── GlassCard.qml              # restyles a shell card as frosted glass
+│   └── apply.sh                   # clone, copy in GlassCard.qml, patch
 ├── kinetic-scroll/                # patch + build script for hypr-kinetic-scroll
 ├── wireplumber/                   # Bluetooth volume + auto-connect, KEF USB no-suspend
 ├── hypr/                          # my Hyprland Lua config
