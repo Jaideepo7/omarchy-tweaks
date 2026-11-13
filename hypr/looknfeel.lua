@@ -59,7 +59,8 @@ hl.config({
 
   general = {
     gaps_in = 0,
-    gaps_out = 2,
+    gaps_out = 0,
+    gaps_workspaces = 0,
   },
 })
 -- <<< omaland managed block <<<
@@ -74,3 +75,15 @@ o.window(".*", { idle_inhibit = "fullscreen" })
 -- Find its class with: hyprctl clients
 -- o.transparent_window("my-app")
 -- o.transparent_window("my-app", "0.9 0.85") -- Custom active/inactive opacity.
+
+-- Screensaver: fully opaque. Overrides the terminal transparency rule, and
+-- `opaque` ignores kitty's own translucent background (theme background_opacity).
+o.window("org.omarchy.screensaver", { opacity = "1.0 override 1.0 override", opaque = true, no_blur = true })
+
+-- mine: frost the Super+Alt+Space app launcher like the other glass shell
+-- surfaces (window-glassy's blur list leaves out omarchy-dock-apps).
+hl.layer_rule({
+  match = { namespace = "^omarchy-dock-apps$" },
+  blur = true,
+  ignore_alpha = 0.3,
+})

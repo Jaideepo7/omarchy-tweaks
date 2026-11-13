@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Mpris
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // Live cava bars. Clicking (or resting on it, via the bar's hover-open) drops
@@ -128,6 +129,10 @@ BarWidget {
     bar: root.bar
     owner: root
     open: root.popupOpen
+    // mine: Suburbs glass, floating off the bar like the notification cards
+    margin: Math.max(Commons.Style.gapsOut, Commons.Style.space(10))
+    borderSpec: Commons.Border.flat(Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.38), 1)
+    GlassCard { radius: 16 }
     padding: Math.round(Style.space(4) * root.popupScale)
     contentWidth: controls.implicitWidth + popup.padding * 2 + 2 * Math.max(1, Style.space(2))
     contentHeight: popup.fittedContentHeight(controls.implicitHeight)

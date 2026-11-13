@@ -24,6 +24,14 @@ if ! cmp -s "$D/systemd-system/battery-charge-limit.service" /etc/systemd/system
   sudo systemctl enable --now battery-charge-limit.service
 fi
 
+# PCI runtime power management: let idle devices suspend (applies at boot; the
+# loop applies it now without re-triggering every PCI udev rule).
+if ! cmp -s "$D/udev/99-pci-runtime-pm.rules" /etc/udev/rules.d/99-pci-runtime-pm.rules; then
+  sudo install -m 644 "$D/udev/99-pci-runtime-pm.rules" /etc/udev/rules.d/
+  sudo udevadm control --reload
+  for f in /sys/bus/pci/devices/*/power/control; do echo auto | sudo tee "$f" >/dev/null; done
+fi
+
 # WirePlumber: Bluetooth software volume + A2DP auto-connect, KEF USB no-suspend
 mkdir -p ~/.config/wireplumber/wireplumber.conf.d
 for f in "$D"/wireplumber/*.conf; do ln -sfn "$f" ~/.config/wireplumber/wireplumber.conf.d/"$(basename "$f")"; done
